@@ -1,7 +1,6 @@
 import Cash from "../models/cash.model.js";
 import { Op } from "sequelize";
 
-
 export const getCashPositionData = async ({
   start_date,
   end_date,
@@ -22,50 +21,58 @@ export const getCashPositionData = async ({
     where.status = status;
   }
 
+  // FIX: organization and as_at_date are now selected, and rows are newest first.
+  // Previously neither was returned, so "latest balance" was really "whichever row came first".
   return Cash.findAll({
     where,
-    attributes: ["account_name", "currency", "balance"],
-    order: [["account_name", "ASC"]],
+    attributes: ["organization", "account_name", "currency", "balance", "as_at_date"],
+    order: [
+      ["as_at_date", "DESC"],
+      ["account_name", "ASC"],
+    ],
   });
 };
 
+const dayValue = (value) => {
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? 0 : time;
+};
 
 export const groupCashPositionData = (rows) => {
-  const latestRecords = {};
-  const formatted = {};
+  // Step 1: keep only the newest balance per organization + account + currency.
+  // This no longer depends on the order the rows arrive in.
+  const latestRecords = new Map();
 
-  // Step 1: Keep only latest record per account + currency
   rows.forEach((row) => {
-    const key = `${row.account_name}-${row.currency}`;
+    const key = `${row.organization}|${row.account_name}|${row.currency}`;
+    const current = latestRecords.get(key);
 
-    if (!latestRecords[key]) {
-      // Because sorted DESC by date,
-      // first one we encounter is latest
-      latestRecords[key] = row;
+    if (!current || dayValue(row.as_at_date) > dayValue(current.as_at_date)) {
+      latestRecords.set(key, row);
     }
   });
 
-  // Step 2: Format for table
-  Object.values(latestRecords).forEach(
-    ({ account_name, currency, balance }) => {
-      if (!formatted[account_name]) {
-        formatted[account_name] = {
-          account_name,
-          GHS: 0,
-          USD: 0,
-          GBP: 0,
-          EUR: 0,
-        };
-      }
+  // Step 2: add the organizations together per account, so "All DADs" shows
+  // the combined balance of every DAD's accounts instead of just one of them.
+  const formatted = {};
 
-      formatted[account_name][currency] = Number(balance);
-    },
-  );
+  latestRecords.forEach(({ account_name, currency, balance }) => {
+    if (!formatted[account_name]) {
+      formatted[account_name] = {
+        account_name,
+        GHS: 0,
+        USD: 0,
+        GBP: 0,
+        EUR: 0,
+      };
+    }
+
+    formatted[account_name][currency] =
+      (formatted[account_name][currency] || 0) + Number(balance);
+  });
 
   return Object.values(formatted);
 };
-
-
 
 export const totalCashPositionSummary = (grouped) => {
   return grouped.reduce(

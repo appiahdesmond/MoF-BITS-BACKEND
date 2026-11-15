@@ -8,19 +8,22 @@ export const getReallocationSummaryData = async ({
   sourceOfFunding,
   status = "ALL",
 }) => {
+  // FIX: createdAt is a datetime. Passing "2026-03-31" as the end meant midnight at the
+  // START of 31 March, so anything created on the last day of a quarter was dropped.
+  // Make the range cover whole days, start to end inclusive.
   const where = {
     createdAt: {
-      // FIXED
-      [Op.between]: [start_date, end_date],
+      [Op.between]: [
+        new Date(`${start_date}T00:00:00.000Z`),
+        new Date(`${end_date}T23:59:59.999Z`),
+      ],
     },
   };
 
-  //  FIXED organization handling
   if (organization && organization !== "ALL") {
     where.organization = organization;
   }
 
-  //  already correct
   if (sourceOfFunding && sourceOfFunding !== "ALL") {
     where.sourceOfFunding = sourceOfFunding;
   }
@@ -87,7 +90,7 @@ export const totalReallocationSummary = (grouped) => {
   return grouped.reduce(
     (totals, row) => {
       ["GOG", "IGF", "DPF"].forEach((fund) => {
-        const data = row[fund] || {}; 
+        const data = row[fund] || {};
 
         totals.reallocated += data.reallocated || 0;
         totals.released += data.released || 0;

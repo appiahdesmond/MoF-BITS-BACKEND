@@ -16,6 +16,7 @@ export const getDashboardAnalytics = async (req, res, next) => {
       sourceOfFunding,
       revenueCategory,
       currencyType,
+      dataStatus, // NEW: "Approved" | "Reviewed" | "Pending" | omitted = all
     } = req.query;
 
     const user = await User.findByPk(req.user.id);
@@ -49,6 +50,7 @@ export const getDashboardAnalytics = async (req, res, next) => {
       sourceOfFunding,
       revenueCategory,
       currencyType,
+      dataStatus,
     });
 
     res.json({

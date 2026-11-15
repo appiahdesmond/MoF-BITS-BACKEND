@@ -1,297 +1,245 @@
 import { Op, fn, col, where as sqlWhere } from "sequelize";
 import BudgetExpenditure from "../models/expenditure.model.js";
 import Revenue from "../models/revenue.model.js";
-import { getAppropriationData } from "./appropriation.service.js";
-import {
-  getQuarterlyReportData,
-  getQuarterlyRevenueData,
-  groupRevenueData,
-  totalRevenueSummary,
-} from "./report.service.js";
-import {
-  getCashPositionData,
-  groupCashPositionData,
-  totalCashPositionSummary,
-} from "./cashReport.service.js";
+import LoadedData from "../models/loadedData.js";
+import { getCashPositionData, groupCashPositionData, totalCashPositionSummary } from "./cashReport.service.js";
 import {
   getReallocationSummaryData,
   groupReallocationSummary,
   totalReallocationSummary,
 } from "./reallocationReport.service.js";
+import { parseDashboardPeriod } from "./analytics.period.js";
+import {
+  round2,
+  round3,
+  safePct,
+  percentChange,
+  periodTiming,
+  spendStatus,
+  igfStatus,
+  monthsOfCover,
+  buildPerformanceRow,
+  buildAlerts,
+  buildInsights,
+  resolveIgfTargets,
+  STATUS_RANK,
+} from "./analytics.metrics.js";
 
-const MONTHS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
+export { parseDashboardPeriod };
 
-const QUARTER_BOUNDS = {
-  1: { startSuffix: "01-01", endSuffix: "03-31" },
-  2: { startSuffix: "04-01", endSuffix: "06-30" },
-  3: { startSuffix: "07-01", endSuffix: "09-30" },
-  4: { startSuffix: "10-01", endSuffix: "12-31" },
-};
-
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const CURRENCIES = ["GHS", "EUR", "GBP", "USD"];
+const DATA_STATUSES = ["Pending", "Reviewed", "Approved"];
 
-const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
-const round3 = (n) => Math.round((Number(n) || 0) * 1000) / 1000;
+// Revenue.budgetProjections is typed in by hand on each record.
+//   "latest": the newest non-zero entry per DAD + category is the whole-year target
+//   "sum":    every entry is its own slice of the target and they add up
+// Switch this one value if your team enters targets the other way.
+const IGF_TARGET_MODE = "latest";
+
+const CATEGORY_LABELS = {
+  "fees/charges": "Fees/Charges",
+  fines: "Fines/Forfeitures",
+  "fines/forfeitures": "Fines/Forfeitures",
+  interests: "Interests",
+  licenses: "Licenses",
+  others: "Others",
+  "sale of goods and services": "Sale Of Goods and Services",
+};
+const categoryLabel = (raw) => CATEGORY_LABELS[String(raw || "").toLowerCase()] || raw || "Unknown";
 
 const isAll = (value) => !value || String(value).toUpperCase() === "ALL";
+const normaliseStatus = (value) => {
+  const match = DATA_STATUSES.find((s) => s.toLowerCase() === String(value || "").toLowerCase());
+  return match || "ALL";
+};
 
-const quarterBounds = (year, quarter) => ({
-  start: `${year}-${QUARTER_BOUNDS[quarter].startSuffix}`,
-  end: `${year}-${QUARTER_BOUNDS[quarter].endSuffix}`,
-});
-
-const previousQuarter = (year, quarter) =>
-  quarter === 1
-    ? { year: year - 1, quarter: 4 }
-    : { year, quarter: quarter - 1 };
-
-const PERIOD_YEAR_MIN = 2000;
-const PERIOD_YEAR_MAX = 2100;
-
-function invalidPeriod() {
-  const error = new Error(
-    "Invalid period. Choose a year from 2000 to 2100 and an optional quarter (1–4).",
-  );
-  error.statusCode = 400;
-  throw error;
-}
-
-function buildPeriod(year, quarters) {
-  const start = quarterBounds(year, quarters[0]).start;
-  const end = quarterBounds(year, quarters[quarters.length - 1]).end;
-
-  let prevYear;
-  let prevQuarters;
-  if (quarters.length === 1) {
-    const prev = previousQuarter(year, quarters[0]);
-    prevYear = prev.year;
-    prevQuarters = [prev.quarter];
-  } else {
-    prevYear = year - 1;
-    prevQuarters = [...quarters];
-  }
-
-  return {
-    year,
-    quarters,
-    start,
-    end,
-    prevYear,
-    prevQuarters,
-    prevStart: quarterBounds(prevYear, prevQuarters[0]).start,
-    prevEnd: quarterBounds(prevYear, prevQuarters[prevQuarters.length - 1]).end,
-  };
-}
-
-function yearToDateQuarters(currentQuarter) {
-  return Array.from({ length: currentQuarter }, (_, i) => i + 1);
-}
-
-function parseYear(year) {
-  const yearNum = Number(String(year).trim());
-  if (
-    !Number.isInteger(yearNum) ||
-    yearNum < PERIOD_YEAR_MIN ||
-    yearNum > PERIOD_YEAR_MAX
-  ) {
-    invalidPeriod();
-  }
-  return yearNum;
-}
-
-// Older clients sent one period string. Keep that path so those requests still resolve.
-function parsePeriodString(period, currentYear, currentQuarter) {
-  if (!period || String(period).trim().toUpperCase() === "YTD") {
-    return buildPeriod(currentYear, yearToDateQuarters(currentQuarter));
-  }
-
-  const str = String(period).trim();
-
-  const yearOnly = str.match(/^(\d{4})$/);
-  if (yearOnly) {
-    return buildPeriod(parseYear(yearOnly[1]), [1, 2, 3, 4]);
-  }
-
-  const qOnly = str.match(/^(?:Q)?([1-4])$/i);
-  if (qOnly) {
-    return buildPeriod(currentYear, [Number(qOnly[1])]);
-  }
-
-  const qThenYear = str.match(/^Q([1-4])[\s\-\/]+(\d{4})$/i);
-  if (qThenYear) {
-    return buildPeriod(parseYear(qThenYear[2]), [Number(qThenYear[1])]);
-  }
-
-  const yearThenQ = str.match(/^(\d{4})[\s\-\/]+Q([1-4])$/i);
-  if (yearThenQ) {
-    return buildPeriod(parseYear(yearThenQ[1]), [Number(yearThenQ[2])]);
-  }
-
-  invalidPeriod();
-}
-
-export function parseDashboardPeriod(input) {
-  const now = new Date();
-  const currentYear = now.getFullYear();
-  const currentQuarter = Math.floor(now.getMonth() / 3) + 1;
-
-  if (typeof input === "string" || input == null || typeof input === "number") {
-    return parsePeriodString(input, currentYear, currentQuarter);
-  }
-
-  const { year, quarter, period } = input;
-  const yearBlank =
-    year === undefined || year === null || String(year).trim() === "";
-  const quarterText =
-    quarter === undefined || quarter === null ? "" : String(quarter).trim();
-  const quarterBlank =
-    !quarterText || quarterText.toUpperCase() === "ALL";
-
-  if (yearBlank && quarterBlank) {
-    if (period) return parsePeriodString(period, currentYear, currentQuarter);
-    return buildPeriod(currentYear, yearToDateQuarters(currentQuarter));
-  }
-
-  const resolvedYear = yearBlank ? currentYear : parseYear(year);
-
-  if (quarterBlank) {
-    return buildPeriod(resolvedYear, [1, 2, 3, 4]);
-  }
-
-  if (quarterText.toUpperCase() === "YTD") {
-    if (resolvedYear === currentYear) {
-      return buildPeriod(currentYear, yearToDateQuarters(currentQuarter));
-    }
-    // A closed year has no partial "to date" window. Return the whole year.
-    return buildPeriod(resolvedYear, [1, 2, 3, 4]);
-  }
-
-  const quarterMatch = quarterText.match(/^Q?([1-4])$/i);
-  if (!quarterMatch) invalidPeriod();
-  return buildPeriod(resolvedYear, [Number(quarterMatch[1])]);
-}
-
-function percentChange(current, previous) {
-  if (!previous) return current === 0 ? 0 : 100;
-  return round2(((current - previous) / Math.abs(previous)) * 100);
-}
-
-function matchesFilter(value, filter) {
-  if (isAll(filter)) return true;
-  return String(value || "").toLowerCase() === String(filter).trim().toLowerCase();
-}
+const matchesFilter = (value, filter) =>
+  isAll(filter) || String(value || "").toLowerCase() === String(filter).trim().toLowerCase();
 
 function formatDay(value) {
   if (typeof value === "string") return value.slice(0, 10);
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    const year = value.getUTCFullYear();
-    const month = String(value.getUTCMonth() + 1).padStart(2, "0");
-    const day = String(value.getUTCDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
+    const y = value.getUTCFullYear();
+    const m = String(value.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(value.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
   }
   return String(value).slice(0, 10);
 }
 
-async function economicTotals({
-  year,
-  quarters,
-  sourceOfFunding,
-  organization,
-  user,
-  economicClassification,
-}) {
-  const [appropriations, ...execParts] = await Promise.all([
-    getAppropriationData({ year, sourceOfFunding, organization, user }),
-    ...quarters.map((quarter) =>
-      getQuarterlyReportData({
-        year,
-        quarter,
-        sourceOfFunding,
-        organization,
-        user,
-      }),
-    ),
+// ---------------------------------------------------------------------------
+// Query helpers. Every one takes the same scope object so filters stay aligned:
+//   { organization, fund, econ, revenueCategory, status }
+// ---------------------------------------------------------------------------
+
+const orgClause = (organization) => (organization ? { organization } : {});
+
+const categoryClause = (revenueCategory) =>
+  isAll(revenueCategory)
+    ? {}
+    : {
+        [Op.and]: [
+          sqlWhere(fn("LOWER", col("revenue_category")), String(revenueCategory).trim().toLowerCase()),
+        ],
+      };
+
+const statusClause = (status) => (status && status !== "ALL" ? { status } : {});
+
+/** Appropriation + allotment come from LoadedData only. Never sum the per-row copies on the expenditure table. */
+async function appropriationGrouped({ year, organization, fund, econ, groupBy }) {
+  const where = { year, ...orgClause(organization) };
+  if (!isAll(fund)) where.sourceOfFunding = fund;
+  if (!isAll(econ)) where.economicClassification = econ;
+
+  return LoadedData.findAll({
+    where,
+    attributes: [
+      ...(groupBy ? [groupBy] : []),
+      [fn("SUM", col("appropriation")), "appropriation"],
+      [fn("SUM", col("allotment")), "allotment"],
+    ],
+    ...(groupBy ? { group: [groupBy] } : {}),
+    raw: true,
+  });
+}
+
+async function expenditureGrouped({ start, end, organization, fund, econ, status, groupBy }) {
+  const where = { date: { [Op.between]: [start, end] }, ...orgClause(organization), ...statusClause(status) };
+  if (!isAll(fund)) where.sourceOfFunding = fund;
+  if (!isAll(econ)) where.economicClassification = econ;
+
+  return BudgetExpenditure.findAll({
+    where,
+    attributes: [
+      ...(groupBy ? [groupBy] : []),
+      [fn("SUM", col("releases")), "releases"],
+      [fn("SUM", col("actualExpenditure")), "expenditure"],
+      [fn("SUM", col("actualPayment")), "payment"],
+    ],
+    ...(groupBy ? { group: [groupBy] } : {}),
+    raw: true,
+  });
+}
+
+async function expenditureByQuarter({ year, organization, fund, econ, status }) {
+  const where = {
+    date: { [Op.between]: [`${year}-01-01`, `${year}-12-31`] },
+    ...orgClause(organization),
+    ...statusClause(status),
+  };
+  if (!isAll(fund)) where.sourceOfFunding = fund;
+  if (!isAll(econ)) where.economicClassification = econ;
+
+  const quarterExpr = fn("QUARTER", col("date"));
+  return BudgetExpenditure.findAll({
+    where,
+    attributes: [
+      [quarterExpr, "quarter"],
+      [fn("SUM", col("releases")), "releases"],
+      [fn("SUM", col("actualExpenditure")), "expenditure"],
+      [fn("SUM", col("actualPayment")), "payment"],
+    ],
+    group: [quarterExpr],
+    raw: true,
+  });
+}
+
+async function igfGrouped({ start, end, organization, revenueCategory, status, groupBy }) {
+  const where = {
+    date: { [Op.between]: [start, end] },
+    ...orgClause(organization),
+    ...categoryClause(revenueCategory),
+    ...statusClause(status),
+  };
+  const groupExpr = groupBy === "category" ? fn("LOWER", col("revenue_category")) : col("organization");
+
+  return Revenue.findAll({
+    where,
+    attributes: [
+      [groupExpr, "groupKey"],
+      [fn("SUM", col("actual_collection")), "actual"],
+      [fn("SUM", col("retention_amount")), "retention"],
+      [fn("SUM", col("payment_amount")), "remitted"],
+    ],
+    group: [groupExpr],
+    raw: true,
+  });
+}
+
+/** Whole-year IGF targets. Not filtered by approval status: they are planning figures. */
+async function igfTargets({ year, organization, revenueCategory }) {
+  const rows = await Revenue.findAll({
+    where: {
+      date: { [Op.between]: [`${year}-01-01`, `${year}-12-31`] },
+      budgetProjections: { [Op.gt]: 0 },
+      ...orgClause(organization),
+      ...categoryClause(revenueCategory),
+    },
+    attributes: ["organization", [fn("LOWER", col("revenue_category")), "category"], "budgetProjections"],
+    order: [
+      ["date", "DESC"],
+      ["id", "DESC"],
+    ],
+    raw: true,
+  });
+  return resolveIgfTargets(rows, IGF_TARGET_MODE);
+}
+
+async function igfTotal({ start, end, organization, revenueCategory, status }) {
+  const where = {
+    date: { [Op.between]: [start, end] },
+    ...orgClause(organization),
+    ...categoryClause(revenueCategory),
+    ...statusClause(status),
+  };
+  const [row] = await Revenue.findAll({
+    where,
+    attributes: [[fn("SUM", col("actual_collection")), "actual"]],
+    raw: true,
+  });
+  return round2(row?.actual);
+}
+
+/** Records that are not yet Approved, inside the current view. */
+async function pendingSummary({ start, end, organization, fund, econ, revenueCategory }) {
+  const dateRange = { [Op.between]: [start, end] };
+  const notApproved = { [Op.ne]: "Approved" };
+
+  const expWhere = { date: dateRange, status: notApproved, ...orgClause(organization) };
+  if (!isAll(fund)) expWhere.sourceOfFunding = fund;
+  if (!isAll(econ)) expWhere.economicClassification = econ;
+
+  const [[exp], [rev]] = await Promise.all([
+    BudgetExpenditure.findAll({
+      where: expWhere,
+      attributes: [
+        [fn("COUNT", col("id")), "count"],
+        [fn("SUM", col("actualExpenditure")), "amount"],
+      ],
+      raw: true,
+    }),
+    Revenue.findAll({
+      where: { date: dateRange, status: notApproved, ...orgClause(organization), ...categoryClause(revenueCategory) },
+      attributes: [
+        [fn("COUNT", col("id")), "count"],
+        [fn("SUM", col("actual_collection")), "amount"],
+      ],
+      raw: true,
+    }),
   ]);
 
-  let approRows = appropriations;
-  let execRows = execParts.flat();
-
-  if (!isAll(economicClassification)) {
-    approRows = approRows.filter((row) =>
-      matchesFilter(row.economicClassification, economicClassification),
-    );
-    execRows = execRows.filter((row) =>
-      matchesFilter(row.economicClassification, economicClassification),
-    );
-  }
-
-  const budget = approRows.reduce(
-    (sum, row) => sum + Number(row.totalAppropriation || 0),
-    0,
-  );
-  const expenditure = execRows.reduce(
-    (sum, row) => sum + Number(row.totalExpenditure || 0),
-    0,
-  );
-
-  return { budget: round2(budget), expenditure: round2(expenditure) };
+  return {
+    count: Number(exp?.count || 0) + Number(rev?.count || 0),
+    expenditureRecords: Number(exp?.count || 0),
+    expenditureAmount: round2(exp?.amount),
+    revenueRecords: Number(rev?.count || 0),
+    revenueAmount: round2(rev?.amount),
+  };
 }
 
-async function igfTotals({ year, quarters, organization, revenueCategory }) {
-  const groupedParts = await Promise.all(
-    quarters.map(async (quarter) => {
-      const raw = await getQuarterlyRevenueData({ year, quarter, organization });
-      return groupRevenueData(raw);
-    }),
-  );
-
-  const byCategory = new Map();
-  for (const rows of groupedParts) {
-    for (const row of rows) {
-      const prev = byCategory.get(row.category) || {
-        ...row,
-        actual: 0,
-        payment: 0,
-        retention: 0,
-        projection: 0,
-        projectionDec: 0,
-      };
-      prev.actual += Number(row.actual || 0);
-      prev.payment += Number(row.payment || 0);
-      prev.retention += Number(row.retention || 0);
-      prev.projection += Number(row.projection || 0);
-      prev.projectionDec += Number(row.projectionDec || 0);
-      byCategory.set(row.category, prev);
-    }
-  }
-
-  let grouped = [...byCategory.values()];
-  if (!isAll(revenueCategory)) {
-    grouped = grouped.filter((row) => matchesFilter(row.category, revenueCategory));
-  }
-
-  return round2(totalRevenueSummary(grouped).actual);
-}
-
-async function cashSnapshot({ start, end, organization, currencyType }) {
-  const raw = await getCashPositionData({
-    start_date: start,
-    end_date: end,
-    organization,
-  });
+async function cashSnapshot({ start, end, organization, currencyType, status }) {
+  const raw = await getCashPositionData({ start_date: start, end_date: end, organization, status });
   const grouped = groupCashPositionData(raw);
   const totals = totalCashPositionSummary(grouped);
   const currency =
@@ -300,7 +248,9 @@ async function cashSnapshot({ start, end, organization, currencyType }) {
       : "GHS";
 
   return {
+    currency,
     amount: round2(totals[currency] || 0),
+    totals: Object.fromEntries(CURRENCIES.map((c) => [c, round2(totals[c] || 0)])),
     byCategory: grouped.map(({ account_name, GHS, EUR, GBP, USD }) => ({
       category: account_name,
       GHS: round2(GHS),
@@ -311,99 +261,58 @@ async function cashSnapshot({ start, end, organization, currencyType }) {
   };
 }
 
-async function reallocationTotals({
-  start,
-  end,
-  organization,
-  sourceOfFunding,
-  economicClassification,
-}) {
+async function reallocationTotals({ start, end, organization, fund, econ, status }) {
   const raw = await getReallocationSummaryData({
     start_date: start,
     end_date: end,
     organization,
-    sourceOfFunding,
+    sourceOfFunding: fund,
+    status,
   });
   const grouped = groupReallocationSummary(raw);
-  const filtered = isAll(economicClassification)
-    ? grouped
-    : grouped.filter((row) => matchesFilter(row.title, economicClassification));
+  const filtered = isAll(econ) ? grouped : grouped.filter((row) => matchesFilter(row.title, econ));
   const totals = totalReallocationSummary(filtered);
 
+  const reallocatedAmount = round2(totals.reallocated);
+  const released = round2(totals.released);
+  const actualExpenditure = round2(totals.expenditure);
+  const actualPayment = round2(totals.payment);
+
   return {
-    reallocatedAmount: round2(totals.reallocated),
-    released: round2(totals.released),
-    actualExpenditure: round2(totals.expenditure),
-    actualPayment: round2(totals.payment),
+    reallocatedAmount,
+    released,
+    actualExpenditure,
+    actualPayment,
+    releaseRatePct: safePct(released, reallocatedAmount),
+    spendRatePct: safePct(actualExpenditure, released),
+    paymentRatePct: safePct(actualPayment, actualExpenditure),
   };
 }
 
-async function monthlyTrend({
-  model,
-  amountCol,
-  dateCol,
-  start,
-  end,
-  organization,
-  extraWhere = {},
-}) {
-  const where = {
-    [dateCol]: { [Op.between]: [start, end] },
-    ...extraWhere,
-  };
-  if (organization) where.organization = organization;
-
+async function dailyTrend({ model, amountCol, start, end, organization, extraWhere = {} }) {
   const rows = await model.findAll({
-    where,
+    where: { date: { [Op.between]: [start, end] }, ...orgClause(organization), ...extraWhere },
     attributes: [
-      [col(dateCol), "day"],
+      [col("date"), "day"],
       [fn("SUM", col(amountCol)), "amount"],
     ],
-    group: [col(dateCol)],
-    order: [[col(dateCol), "ASC"]],
+    group: [col("date")],
+    order: [[col("date"), "ASC"]],
     raw: true,
   });
 
   return rows.map((row) => {
     const date = formatDay(row.day);
-    const monthNum = Number(date.slice(5, 7));
-    return {
-      date,
-      month: MONTHS[monthNum - 1] || "",
-      amount: round2(row.amount),
-    };
+    return { date, month: MONTHS[Number(date.slice(5, 7)) - 1] || "", amount: round2(row.amount) };
   });
 }
 
-async function getTopIgfDads({ start, end, organization, revenueCategory }) {
-  const where = {
-    date: { [Op.between]: [start, end] },
-  };
-  if (organization) where.organization = organization;
-  if (!isAll(revenueCategory)) {
-    where[Op.and] = [
-      sqlWhere(fn("LOWER", col("revenue_category")), revenueCategory.trim().toLowerCase()),
-    ];
-  }
+const indexBy = (rows, key) => Object.fromEntries(rows.map((r) => [r[key], r]));
+const n = (value) => Number(value) || 0;
 
-  const rows = await Revenue.findAll({
-    where,
-    attributes: [
-      "organization",
-      [fn("SUM", col("actual_collection")), "total"],
-    ],
-    group: ["organization"],
-    order: [[fn("SUM", col("actual_collection")), "DESC"]],
-    raw: true,
-  });
-
-  const grand = rows.reduce((sum, row) => sum + Number(row.total || 0), 0);
-
-  return rows.slice(0, 5).map((row) => ({
-    organization: row.organization,
-    percent: grand ? round2((Number(row.total) / grand) * 100) : 0,
-  }));
-}
+// ---------------------------------------------------------------------------
+// Main entry point
+// ---------------------------------------------------------------------------
 
 export async function getDashboardAnalyticsData({
   user,
@@ -413,26 +322,32 @@ export async function getDashboardAnalyticsData({
   sourceOfFunding = "ALL",
   revenueCategory,
   currencyType,
+  dataStatus,
 }) {
-  const fund = isAll(sourceOfFunding) ? "ALL" : sourceOfFunding;
   const parsed = typeof period === "object" && period?.year ? period : parseDashboardPeriod(period);
+  const fund = isAll(sourceOfFunding) ? "ALL" : sourceOfFunding;
+  const econ = isAll(economicClassification) ? "ALL" : economicClassification;
+  const status = normaliseStatus(dataStatus);
 
-  const expenditureWhere = {};
-  if (!isAll(fund)) expenditureWhere.sourceOfFunding = fund;
-  if (!isAll(economicClassification)) {
-    expenditureWhere.economicClassification = economicClassification;
-  }
+  // Non-admins are always pinned to their own DAD, whatever the controller passed.
+  const scopeOrg = user.role === "admin" ? organization : user.organization;
 
-  const igfWhere = {};
-  if (!isAll(revenueCategory)) {
-    igfWhere[Op.and] = [
-      sqlWhere(fn("LOWER", col("revenue_category")), revenueCategory.trim().toLowerCase()),
-    ];
-  }
+  const base = { organization: scopeOrg, fund, econ, revenueCategory, status };
+  const { year, start, end } = parsed;
+  const timing = periodTiming(parsed);
 
   const [
-    currentEco,
-    prevEco,
+    appropriationTotal,
+    appropriationByOrg,
+    appropriationByEcon,
+    expenditureTotal,
+    expenditureByOrg,
+    expenditureByEcon,
+    quarterlyRows,
+    prevExpenditureTotal,
+    igfByOrg,
+    igfByCategory,
+    targets,
     currentIgf,
     prevIgf,
     currentCash,
@@ -440,100 +355,251 @@ export async function getDashboardAnalyticsData({
     reallocation,
     igfCollectionTrend,
     expenditureTrend,
-    topIgfDads,
+    pending,
   ] = await Promise.all([
-    economicTotals({
-      year: parsed.year,
-      quarters: parsed.quarters,
-      sourceOfFunding: fund,
-      organization,
-      user,
-      economicClassification,
-    }),
-    economicTotals({
-      year: parsed.prevYear,
-      quarters: parsed.prevQuarters,
-      sourceOfFunding: fund,
-      organization,
-      user,
-      economicClassification,
-    }),
-    igfTotals({
-      year: parsed.year,
-      quarters: parsed.quarters,
-      organization,
-      revenueCategory,
-    }),
-    igfTotals({
-      year: parsed.prevYear,
-      quarters: parsed.prevQuarters,
-      organization,
-      revenueCategory,
-    }),
-    cashSnapshot({
-      start: parsed.start,
-      end: parsed.end,
-      organization,
-      currencyType,
-    }),
-    cashSnapshot({
-      start: parsed.prevStart,
-      end: parsed.prevEnd,
-      organization,
-      currencyType,
-    }),
-    reallocationTotals({
-      start: parsed.start,
-      end: parsed.end,
-      organization,
-      sourceOfFunding: fund,
-      economicClassification,
-    }),
-    monthlyTrend({
+    appropriationGrouped({ year, ...base }),
+    appropriationGrouped({ year, ...base, groupBy: "organization" }),
+    appropriationGrouped({ year, ...base, groupBy: "economicClassification" }),
+    expenditureGrouped({ start, end, ...base }),
+    expenditureGrouped({ start, end, ...base, groupBy: "organization" }),
+    expenditureGrouped({ start, end, ...base, groupBy: "economicClassification" }),
+    expenditureByQuarter({ year, ...base }),
+    expenditureGrouped({ start: parsed.prevStart, end: parsed.prevEnd, ...base }),
+    igfGrouped({ start, end, ...base, groupBy: "organization" }),
+    igfGrouped({ start, end, ...base, groupBy: "category" }),
+    igfTargets({ year, organization: scopeOrg, revenueCategory }),
+    igfTotal({ start, end, ...base }),
+    igfTotal({ start: parsed.prevStart, end: parsed.prevEnd, ...base }),
+    cashSnapshot({ start, end, organization: scopeOrg, currencyType, status }),
+    cashSnapshot({ start: parsed.prevStart, end: parsed.prevEnd, organization: scopeOrg, currencyType, status }),
+    reallocationTotals({ start, end, ...base }),
+    dailyTrend({
       model: Revenue,
       amountCol: "actual_collection",
-      dateCol: "date",
-      start: parsed.start,
-      end: parsed.end,
-      organization,
-      extraWhere: igfWhere,
+      start,
+      end,
+      organization: scopeOrg,
+      extraWhere: { ...categoryClause(revenueCategory), ...statusClause(status) },
     }),
-    monthlyTrend({
+    dailyTrend({
       model: BudgetExpenditure,
       amountCol: "actualExpenditure",
-      dateCol: "date",
-      start: parsed.start,
-      end: parsed.end,
-      organization,
-      extraWhere: expenditureWhere,
+      start,
+      end,
+      organization: scopeOrg,
+      extraWhere: {
+        ...(!isAll(fund) ? { sourceOfFunding: fund } : {}),
+        ...(!isAll(econ) ? { economicClassification: econ } : {}),
+        ...statusClause(status),
+      },
     }),
-    getTopIgfDads({
-      start: parsed.start,
-      end: parsed.end,
-      organization,
-      revenueCategory,
-    }),
+    pendingSummary({ start, end, ...base }),
   ]);
 
-  const expenditureToDate = currentEco.expenditure;
-  const prevExpenditure = prevEco.expenditure;
-  const totalBudget = currentEco.budget;
-  const budgetUtilisationPct = totalBudget
-    ? round3((expenditureToDate / totalBudget) * 100)
-    : 0;
+  // ---- Totals -------------------------------------------------------------
+  const budget = n(appropriationTotal[0]?.appropriation);
+  const allotment = n(appropriationTotal[0]?.allotment);
+  const releases = n(expenditureTotal[0]?.releases);
+  const expenditure = n(expenditureTotal[0]?.expenditure);
+  const payment = n(expenditureTotal[0]?.payment);
+  const prevExpenditure = n(prevExpenditureTotal[0]?.expenditure);
+
+  const expectedSpend = budget * timing.expectedFraction;
+  const igfTargetYear = Object.values(targets.byOrg).reduce((a, b) => a + b, 0);
+  const igfTargetToDate = igfTargetYear * timing.expectedFraction;
+
+  // ---- Per-DAD performance ------------------------------------------------
+  const appByOrg = indexBy(appropriationByOrg, "organization");
+  const expByOrg = indexBy(expenditureByOrg, "organization");
+  const igfOrg = indexBy(igfByOrg, "groupKey");
+  const orgKeys = new Set([
+    ...Object.keys(appByOrg),
+    ...Object.keys(expByOrg),
+    ...Object.keys(igfOrg),
+  ]);
+
+  const dadPerformance = [...orgKeys]
+    .map((key) =>
+      buildPerformanceRow({
+        key,
+        appropriation: n(appByOrg[key]?.appropriation),
+        allotment: n(appByOrg[key]?.allotment),
+        releases: n(expByOrg[key]?.releases),
+        expenditure: n(expByOrg[key]?.expenditure),
+        payment: n(expByOrg[key]?.payment),
+        igfActual: n(igfOrg[key]?.actual),
+        igfTarget: n(targets.byOrg[key]) * timing.expectedFraction,
+        retention: n(igfOrg[key]?.retention),
+        remitted: n(igfOrg[key]?.remitted),
+        expectedFraction: timing.expectedFraction,
+      }),
+    )
+    .sort(
+      (a, b) =>
+        (STATUS_RANK[b.status] ?? 0) - (STATUS_RANK[a.status] ?? 0) ||
+        b.expenditure - a.expenditure,
+    )
+    .map(({ key, ...rest }) => ({ organization: key, ...rest }));
+
+  // ---- Economic classification breakdown ----------------------------------
+  const appByEcon = indexBy(appropriationByEcon, "economicClassification");
+  const expByEcon = indexBy(expenditureByEcon, "economicClassification");
+  const ECON_ORDER = ["Compensation of Employees", "Goods and Services", "Capital Expenditure"];
+  const economicBreakdown = [...new Set([...Object.keys(appByEcon), ...Object.keys(expByEcon)])]
+    .map((key) =>
+      buildPerformanceRow({
+        key,
+        appropriation: n(appByEcon[key]?.appropriation),
+        allotment: n(appByEcon[key]?.allotment),
+        releases: n(expByEcon[key]?.releases),
+        expenditure: n(expByEcon[key]?.expenditure),
+        payment: n(expByEcon[key]?.payment),
+        expectedFraction: timing.expectedFraction,
+      }),
+    )
+    .sort((a, b) => {
+      const ia = ECON_ORDER.indexOf(a.key);
+      const ib = ECON_ORDER.indexOf(b.key);
+      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+    })
+    .map(({ key, ...rest }) => ({ classification: key, ...rest }));
+
+  // ---- Budget execution by quarter (whole selected year) -------------------
+  const quarterIndex = indexBy(quarterlyRows, "quarter");
+  const quarterly = [1, 2, 3, 4].map((q) => {
+    const row = quarterIndex[q] || {};
+    return {
+      quarter: `Q${q}`,
+      selected: parsed.quarters.includes(q),
+      expected: round2(budget / 4),
+      releases: round2(row.releases),
+      expenditure: round2(row.expenditure),
+      payment: round2(row.payment),
+    };
+  });
+
+  // ---- IGF -----------------------------------------------------------------
+  const igfRetention = igfByOrg.reduce((s, r) => s + n(r.retention), 0);
+  const igfRemitted = igfByOrg.reduce((s, r) => s + n(r.remitted), 0);
+
+  const categoryRows = igfByCategory.map((r) => ({
+    category: categoryLabel(r.groupKey),
+    rawKey: String(r.groupKey || "").toLowerCase(),
+    actual: n(r.actual),
+  }));
+  // Include categories that have a target but no collection yet.
+  for (const key of Object.keys(targets.byCategory)) {
+    if (!categoryRows.some((c) => c.rawKey === key)) {
+      categoryRows.push({ category: categoryLabel(key), rawKey: key, actual: 0 });
+    }
+  }
+  const igfCategories = categoryRows
+    .map(({ category, rawKey, actual }) => {
+      const target = n(targets.byCategory[rawKey]) * timing.expectedFraction;
+      return {
+        category,
+        actual: round2(actual),
+        target: round2(target),
+        attainmentPct: target ? safePct(actual, target) : null,
+        status: igfStatus({ actual, target }),
+      };
+    })
+    .sort((a, b) => b.actual - a.actual);
+
+  const igfGrand = igfByOrg.reduce((s, r) => s + n(r.actual), 0);
+  const topIgfDads = [...igfByOrg]
+    .sort((a, b) => n(b.actual) - n(a.actual))
+    .slice(0, 5)
+    .map((r) => ({
+      organization: r.groupKey,
+      amount: round2(r.actual),
+      percent: igfGrand ? round2((n(r.actual) / igfGrand) * 100) : 0,
+    }));
+
+  const igf = {
+    actual: currentIgf,
+    targetYear: round2(igfTargetYear),
+    targetToDate: round2(igfTargetToDate),
+    attainmentPct: igfTargetToDate ? safePct(currentIgf, igfTargetToDate) : null,
+    retained: round2(igfRetention),
+    remitted: round2(igfRemitted),
+    retentionSharePct: safePct(igfRetention, igfRetention + igfRemitted),
+    topFiveSharePct: round2(topIgfDads.reduce((s, d) => s + d.percent, 0)),
+    targetMode: IGF_TARGET_MODE,
+    byCategory: igfCategories,
+  };
+
+  // ---- Liquidity -----------------------------------------------------------
+  // Months of cover only uses GHS: there are no exchange rates to convert the rest.
+  const cover = monthsOfCover({
+    cash: currentCash.totals.GHS,
+    expenditure,
+    elapsedDays: timing.elapsedDays,
+  });
+  const liquidity = {
+    ghsCash: currentCash.totals.GHS,
+    totals: currentCash.totals,
+    monthlyBurn: cover?.monthlyBurn ?? null,
+    months: cover?.months ?? null,
+    byCategory: currentCash.byCategory,
+  };
+
+  // ---- Summary -------------------------------------------------------------
+  const pacePct = expectedSpend ? safePct(expenditure, expectedSpend) : null;
+  const summary = {
+    totalBudget: round2(budget),
+    totalAllotment: round2(allotment),
+    releases: round2(releases),
+    releaseRatePct: safePct(releases, allotment),
+    expenditureToDate: round2(expenditure),
+    expenditureChangePct: percentChange(expenditure, prevExpenditure),
+    budgetUtilisationPct: round3(budget ? (expenditure / budget) * 100 : 0),
+    expectedSpend: round2(expectedSpend),
+    pacePct,
+    spendStatus: spendStatus({ expenditure, expected: expectedSpend, appropriation: budget }),
+    payments: round2(payment),
+    unpaid: round2(expenditure - payment),
+    unpaidSharePct: safePct(expenditure - payment, expenditure),
+    variance: round2(budget - expenditure),
+    igfCollectionToDate: currentIgf,
+    igfChangePct: percentChange(currentIgf, prevIgf),
+    igfStatus: igfStatus({ actual: currentIgf, target: igfTargetToDate }),
+    cashPositionToDate: currentCash.amount,
+    cashCurrency: currentCash.currency,
+    cashPositionChangePct: percentChange(currentCash.amount, prevCash.amount),
+  };
+
+  const alerts = buildAlerts({ rows: dadPerformance, liquidity, pending });
 
   return {
-    summary: {
-      totalBudget,
-      expenditureToDate,
-      expenditureChangePct: percentChange(expenditureToDate, prevExpenditure),
-      budgetUtilisationPct,
-      variance: round2(totalBudget - expenditureToDate),
-      igfCollectionToDate: currentIgf,
-      igfChangePct: percentChange(currentIgf, prevIgf),
-      cashPositionToDate: currentCash.amount,
-      cashPositionChangePct: percentChange(currentCash.amount, prevCash.amount),
+    meta: {
+      dataStatus: status,
+      comparisonLabel:
+        parsed.quarters.length === 1 ? "vs previous quarter" : `vs ${parsed.prevYear}`,
+      expectedPct: round2(timing.expectedFraction * 100),
+      expectedBasis: "Appropriation spread evenly by day across the year",
+      isInProgress: timing.isInProgress,
+      currencyNote: "Budget, expenditure and IGF are reported in GHS. The currency filter applies to cash only.",
     },
+    summary,
+    budgetExecution: {
+      funnel: [
+        { stage: "Appropriation", amount: round2(budget) },
+        { stage: "Allotment", amount: round2(allotment) },
+        { stage: "Releases", amount: round2(releases) },
+        { stage: "Expenditure", amount: round2(expenditure) },
+        { stage: "Payment", amount: round2(payment) },
+      ],
+      quarterly,
+    },
+    dadPerformance,
+    economicBreakdown,
+    igf,
+    liquidity,
+    alerts,
+    pending,
+    insights: buildInsights({ summary, liquidity, igf }),
+    // Existing keys, kept so older pieces of the UI keep working.
     igfCollectionTrend,
     expenditureTrend,
     topIgfDads,
