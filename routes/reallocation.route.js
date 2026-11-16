@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { restrict } from "../middleware/restrict.js";
 import { protectRoutes } from "../middleware/routesProtect.js";
-import { addReallocation, approveReallocation, deleteReallocation, getAllReallocation, reviewReallocation, updateReallocation } from "../controllers/reallocation.controller.js";
+import { addReallocation, approveReallocation, deleteReallocation, getAllReallocation, markReallocationViewed, reviewReallocation, updateReallocation } from "../controllers/reallocation.controller.js";
 
 const router = Router();
 
@@ -18,6 +18,8 @@ router.patch("/:id/review", restrict("reviewer", "admin"), reviewReallocation);
 
 //approver
 router.patch("/:id/approve", restrict("approver", "admin"), approveReallocation);
+
+router.post("/:id/view", restrict("reviewer", "approver", "admin"), markReallocationViewed);
 
 router.get("/", getAllReallocation);
 

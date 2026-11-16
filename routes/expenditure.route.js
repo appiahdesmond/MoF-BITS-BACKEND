@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { addExpenditure, approveExpenditure, deleteExpenditure, getAllExpenditure, reviewExpenditure, updateExpenditure } from "../controllers/expenditure.controller.js";
+import { addExpenditure, approveExpenditure, deleteExpenditure, getAllExpenditure, markExpenditureViewed, reviewExpenditure, updateExpenditure } from "../controllers/expenditure.controller.js";
 import { protectRoutes } from "../middleware/routesProtect.js";
 import { restrict } from "../middleware/restrict.js";
 
@@ -19,6 +19,8 @@ router.patch("/:id/review", restrict("reviewer", "admin"), reviewExpenditure);
 
 //approver
 router.patch("/:id/approve", restrict("approver", "admin"), approveExpenditure);
+
+router.post("/:id/view", restrict("reviewer", "approver", "admin"), markExpenditureViewed);
 
 router.get("/", getAllExpenditure);
 

@@ -1,7 +1,7 @@
 import Reallocation from "../models/reallocation.model.js";
 import User from "../models/users.js";
 import sequelize from "../config/database.js";
-import { notifyRole, resolveReviewedNotifications } from "../utils/notify.js";
+import { notifyOrganization, notifyRecordOpened } from "../utils/notify.js";
 
 export const addReallocation = async (req, res, next) => {
   //declare variable later a value will be assigned to it
@@ -85,9 +85,8 @@ export const addReallocation = async (req, res, next) => {
     await reallocationTransaction.commit();
 
     try {
-      await notifyRole({
+      await notifyOrganization({
         organization: user.organization,
-        role: "reviewer",
         actorId: user.id,
         entityType: "reallocation",
         entityId: reallocation.id,
@@ -329,9 +328,8 @@ export const reviewReallocation = async (req, res, next) => {
     await record.save();
 
     try {
-      await notifyRole({
-        organization: user.organization,
-        role: "approver",
+      await notifyOrganization({
+        organization: record.organization,
         actorId: user.id,
         entityType: "reallocation",
         entityId: record.id,
@@ -401,9 +399,12 @@ export const approveReallocation = async (req, res, next) => {
     await record.save();
 
     try {
-      await resolveReviewedNotifications({
+      await notifyOrganization({
+        organization: record.organization,
+        actorId: user.id,
         entityType: "reallocation",
         entityId: record.id,
+        event: "approved",
         message: `${user.name} approved a reallocation record`,
       });
     } catch (notifyError) {
@@ -415,6 +416,34 @@ export const approveReallocation = async (req, res, next) => {
       message: "Reallocation record approved successfully",
       data: record,
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const markReallocationViewed = async (req, res, next) => {
+  try {
+    const user = req.user;
+    const record = await Reallocation.findByPk(req.params.id);
+    if (!record) {
+      const error = new Error("Reallocation record not found");
+      error.statusCode = 404;
+      return next(error);
+    }
+    if (record.organization !== user.organization) {
+      const error = new Error("You cannot open a record outside your organization");
+      error.statusCode = 403;
+      return next(error);
+    }
+
+    await notifyRecordOpened({
+      actor: user,
+      record,
+      entityType: "reallocation",
+      label: "reallocation record",
+    });
+
+    res.status(200).json({ success: true });
   } catch (error) {
     next(error);
   }

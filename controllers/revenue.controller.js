@@ -1,7 +1,7 @@
 import Revenue from "../models/revenue.model.js";
 import User from "../models/users.js";
 import { organizationRetentionRate } from "../data/organizationRetentionRate.js";
-import { notifyRole, resolveReviewedNotifications } from "../utils/notify.js";
+import { notifyOrganization, notifyRecordOpened } from "../utils/notify.js";
 
 /**
  * Helper to compute retention + payment from C and rate
@@ -113,9 +113,8 @@ export const addRevenue = async (req, res, next) => {
     });
 
     try {
-      await notifyRole({
+      await notifyOrganization({
         organization: user.organization,
-        role: "reviewer",
         actorId: user.id,
         entityType: "revenue",
         entityId: revenue.id,
@@ -316,9 +315,12 @@ export const approveRevenue = async (req, res, next) => {
     await record.save();
 
     try {
-      await resolveReviewedNotifications({
+      await notifyOrganization({
+        organization: record.organization,
+        actorId: user.id,
         entityType: "revenue",
         entityId: record.id,
+        event: "approved",
         message: `${user.name} approved a revenue record`,
       });
     } catch (notifyError) {
@@ -371,9 +373,8 @@ export const reviewRevenue = async (req, res, next) => {
     await record.save();
 
     try {
-      await notifyRole({
-        organization: user.organization,
-        role: "approver",
+      await notifyOrganization({
+        organization: record.organization,
         actorId: user.id,
         entityType: "revenue",
         entityId: record.id,
@@ -389,6 +390,34 @@ export const reviewRevenue = async (req, res, next) => {
       message: "Revenue record reviewed successfully",
       data: record,
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const markRevenueViewed = async (req, res, next) => {
+  try {
+    const user = req.user;
+    const record = await Revenue.findByPk(req.params.id);
+    if (!record) {
+      const error = new Error("Revenue record not found");
+      error.statusCode = 404;
+      return next(error);
+    }
+    if (record.organization !== user.organization) {
+      const error = new Error("You cannot open a record outside your organization");
+      error.statusCode = 403;
+      return next(error);
+    }
+
+    await notifyRecordOpened({
+      actor: user,
+      record,
+      entityType: "revenue",
+      label: "revenue record",
+    });
+
+    res.status(200).json({ success: true });
   } catch (error) {
     next(error);
   }

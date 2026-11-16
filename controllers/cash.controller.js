@@ -1,6 +1,6 @@
 import Cash from "../models/cash.model.js";
 import User from "../models/users.js";
-import { notifyRole, resolveReviewedNotifications } from "../utils/notify.js";
+import { notifyOrganization, notifyRecordOpened } from "../utils/notify.js";
 
 export const addCashPosition = async (req, res, next) => {
   try {
@@ -46,9 +46,8 @@ export const addCashPosition = async (req, res, next) => {
     });
 
     try {
-      await notifyRole({
+      await notifyOrganization({
         organization: user.organization,
-        role: "reviewer",
         actorId: user.id,
         entityType: "cash",
         entityId: record.id,
@@ -223,9 +222,8 @@ export const reviewCashPosition = async (req, res, next) => {
     await cash.save();
 
     try {
-      await notifyRole({
-        organization: user.organization,
-        role: "approver",
+      await notifyOrganization({
+        organization: cash.organization,
         actorId: user.id,
         entityType: "cash",
         entityId: cash.id,
@@ -265,9 +263,12 @@ export const approveCashPosition = async (req, res, next) => {
     await record.save();
 
     try {
-      await resolveReviewedNotifications({
+      await notifyOrganization({
+        organization: record.organization,
+        actorId: user.id,
         entityType: "cash",
         entityId: record.id,
+        event: "approved",
         message: `${user.name} approved a cash position`,
       });
     } catch (notifyError) {
@@ -279,6 +280,34 @@ export const approveCashPosition = async (req, res, next) => {
       message: "Cash position approved successfully",
       data: record,
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const markCashViewed = async (req, res, next) => {
+  try {
+    const user = req.user;
+    const record = await Cash.findByPk(req.params.id);
+    if (!record) {
+      const error = new Error("Cash position record not found");
+      error.statusCode = 404;
+      return next(error);
+    }
+    if (record.organization !== user.organization) {
+      const error = new Error("You cannot open a record outside your organization");
+      error.statusCode = 403;
+      return next(error);
+    }
+
+    await notifyRecordOpened({
+      actor: user,
+      record,
+      entityType: "cash",
+      label: "cash position",
+    });
+
+    res.status(200).json({ success: true });
   } catch (error) {
     next(error);
   }

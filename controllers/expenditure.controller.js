@@ -3,7 +3,7 @@ import User from "../models/users.js";
 import LoadedData from "../models/loadedData.js";
 import { Op } from "sequelize";
 import sequelize from "../config/database.js";
-import { notifyRole, resolveReviewedNotifications } from "../utils/notify.js";
+import { notifyOrganization, notifyRecordOpened } from "../utils/notify.js";
 
 export const addExpenditure = async (req, res, next) => {
   const t = await sequelize.transaction();
@@ -186,9 +186,8 @@ export const addExpenditure = async (req, res, next) => {
     await t.commit();
 
     try {
-      await notifyRole({
+      await notifyOrganization({
         organization: user.organization,
-        role: "reviewer",
         actorId: user.id,
         entityType: "expenditure",
         entityId: expenditure.id,
@@ -490,9 +489,12 @@ export const approveExpenditure = async (req, res, next) => {
     await record.save();
 
     try {
-      await resolveReviewedNotifications({
+      await notifyOrganization({
+        organization: record.organization,
+        actorId: user.id,
         entityType: "expenditure",
         entityId: record.id,
+        event: "approved",
         message: `${user.name} approved an expenditure record`,
       });
     } catch (notifyError) {
@@ -548,9 +550,8 @@ export const reviewExpenditure = async (req, res, next) => {
     await record.save();
 
     try {
-      await notifyRole({
-        organization: user.organization,
-        role: "approver",
+      await notifyOrganization({
+        organization: record.organization,
         actorId: user.id,
         entityType: "expenditure",
         entityId: record.id,
@@ -567,6 +568,34 @@ export const reviewExpenditure = async (req, res, next) => {
       message: "Expenditure record reviewed successfully",
       data: record,
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const markExpenditureViewed = async (req, res, next) => {
+  try {
+    const user = req.user;
+    const record = await BudgetExpenditure.findByPk(req.params.id);
+    if (!record) {
+      const error = new Error("Expenditure record not found");
+      error.statusCode = 404;
+      return next(error);
+    }
+    if (record.organization !== user.organization) {
+      const error = new Error("You cannot open a record outside your organization");
+      error.statusCode = 403;
+      return next(error);
+    }
+
+    await notifyRecordOpened({
+      actor: user,
+      record,
+      entityType: "expenditure",
+      label: "expenditure record",
+    });
+
+    res.status(200).json({ success: true });
   } catch (error) {
     next(error);
   }

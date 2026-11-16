@@ -44,7 +44,7 @@ const Notification = sequelize.define(
     },
 
     event: {
-      type: DataTypes.ENUM("created", "reviewed"),
+      type: DataTypes.ENUM("created", "reviewed", "approved", "viewed"),
       allowNull: false,
     },
 
