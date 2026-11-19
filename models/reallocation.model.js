@@ -74,7 +74,7 @@ const Reallocation = sequelize.define(
       onDelete: "SET NULL", // or "CASCADE" if you want child rows deleted too
     },
     status: {
-      type: DataTypes.ENUM("Pending", "Reviewed", "Approved"),
+      type: DataTypes.ENUM("Pending", "Reviewed", "Approved", "Returned"),
       defaultValue: "Pending",
       allowNull: false,
     },
@@ -98,6 +98,9 @@ const Reallocation = sequelize.define(
       type: DataTypes.STRING,
       allowNull: true,
     },
+    returnReason: { type: DataTypes.TEXT, allowNull: true },
+    returnedBy: { type: DataTypes.STRING, allowNull: true },
+    returnedAt: { type: DataTypes.DATE, allowNull: true },
     approvedAt: {
       type: DataTypes.DATE,
       allowNull: true,

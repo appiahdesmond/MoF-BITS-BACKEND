@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { restrict } from "../middleware/restrict.js";
 import { protectRoutes } from "../middleware/routesProtect.js";
-import { addCashPosition, approveCashPosition, deleteCashPosition, getAllCashPositions, markCashViewed, reviewCashPosition, updateCashPosition } from "../controllers/cash.controller.js";
+import { addCashPosition, approveCashPosition, deleteCashPosition, getAllCashPositions, markCashViewed, reviewCashPosition, updateCashPosition, returnCashPosition } from "../controllers/cash.controller.js";
 
 const router = Router();
 
@@ -16,6 +16,7 @@ router.delete("/:id", restrict("data_entry", "admin"), deleteCashPosition);
 
 //reviewer
 router.patch("/:id/review", restrict("reviewer", "admin"), reviewCashPosition);
+router.patch("/:id/return", restrict("reviewer", "approver", "admin"), returnCashPosition);
 
 //approver
 router.patch("/:id/approve", restrict("approver", "admin"), approveCashPosition);

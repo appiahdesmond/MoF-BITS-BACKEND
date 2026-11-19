@@ -2,7 +2,8 @@ import Reallocation from "../models/reallocation.model.js";
 import User from "../models/users.js";
 import sequelize from "../config/database.js";
 import { notifyOrganization, notifyRecordOpened } from "../utils/notify.js";
-import { workflowStepError } from "../utils/workflowGuard.js";
+import { editStepError, workflowStepError } from "../utils/workflowGuard.js";
+import { makeReturnHandler, notifyResubmitted } from "../utils/returnRecord.js";
 
 export const addReallocation = async (req, res, next) => {
   //declare variable later a value will be assigned to it
@@ -188,11 +189,9 @@ export const updateReallocation = async (req, res, next) => {
     }
 
     // Prevent editing finalized records (if applicable)
-    if (record.status === "Reviewed" || record.status === "Approved") {
-      const error = new Error("You cannot edit a reviewed or approved record");
-      error.statusCode = 400;
-      return next(error);
-    }
+    const editError = editStepError(record, user, "edit");
+    if (editError) return next(editError);
+    const resubmitted = record.status === "Returned";
 
     // =========================
     // MERGE VALUES FIRST
@@ -231,7 +230,10 @@ export const updateReallocation = async (req, res, next) => {
     };
 
     // Apply update
+    if (resubmitted) updatedData.status = "Pending";
     await record.update(updatedData);
+
+    if (resubmitted) await notifyResubmitted({ record, user: user, entityType: "reallocation", label: "Reallocation" });
 
     res.status(200).json({
       success: true,
@@ -271,13 +273,8 @@ export const deleteReallocation = async (req, res, next) => {
     }
 
     // Prevent deleting reviewed or approved records
-    if (record.status === "Reviewed" || record.status === "Approved") {
-      const error = new Error(
-        "You cannot delete a reviewed or approved record",
-      );
-      error.statusCode = 400;
-      return next(error);
-    }
+    const editError = editStepError(record, user, "delete");
+    if (editError) return next(editError);
 
     await record.destroy();
 
@@ -455,3 +452,11 @@ export const markReallocationViewed = async (req, res, next) => {
     next(error);
   }
 };
+
+
+// PATCH /:id/return — send back to the data entry officer for correction.
+export const returnReallocation = makeReturnHandler({
+  Model: Reallocation,
+  entityType: "reallocation",
+  label: "Reallocation",
+});

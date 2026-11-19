@@ -4,7 +4,8 @@ import LoadedData from "../models/loadedData.js";
 import { Op } from "sequelize";
 import sequelize from "../config/database.js";
 import { notifyOrganization, notifyRecordOpened } from "../utils/notify.js";
-import { workflowStepError } from "../utils/workflowGuard.js";
+import { editStepError, workflowStepError } from "../utils/workflowGuard.js";
+import { makeReturnHandler, notifyResubmitted } from "../utils/returnRecord.js";
 
 export const addExpenditure = async (req, res, next) => {
   const t = await sequelize.transaction();
@@ -283,11 +284,9 @@ export const updateExpenditure = async (req, res, next) => {
       throw error;
     }
 
-    if (record.status === "Reviewed" || record.status === "Approved") {
-      const error = new Error("You cannot edit a reviewed or approved record");
-      error.statusCode = 400;
-      throw error;
-    }
+    const editError = editStepError(record, user, "edit");
+    if (editError) throw editError;
+    const resubmitted = record.status === "Returned";
 
     /* =========================
        MERGE OLD + NEW VALUES
@@ -403,6 +402,7 @@ export const updateExpenditure = async (req, res, next) => {
     await record.update(
       {
         ...effectiveValues,
+        ...(resubmitted && { status: "Pending" }),
         appropriation,
         allotment,
         allotmentBalance,
@@ -412,6 +412,8 @@ export const updateExpenditure = async (req, res, next) => {
     );
 
     await t.commit();
+
+    if (resubmitted) await notifyResubmitted({ record, user: user, entityType: "expenditure", label: "Expenditure" });
 
     res.status(200).json({
       success: true,
@@ -450,13 +452,8 @@ export const deleteExpenditure = async (req, res, next) => {
     }
 
     // Prevent deleting reviewed or approved records
-    if (record.status === "Reviewed" || record.status === "Approved") {
-      const error = new Error(
-        "You cannot delete a reviewed or approved record",
-      );
-      error.statusCode = 400;
-      return next(error);
-    }
+    const editError = editStepError(record, user, "delete");
+    if (editError) return next(editError);
 
     await record.destroy();
 
@@ -607,3 +604,11 @@ export const markExpenditureViewed = async (req, res, next) => {
     next(error);
   }
 };
+
+
+// PATCH /:id/return — send back to the data entry officer for correction.
+export const returnExpenditure = makeReturnHandler({
+  Model: BudgetExpenditure,
+  entityType: "expenditure",
+  label: "Expenditure",
+});

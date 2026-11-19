@@ -1,7 +1,8 @@
 import Cash from "../models/cash.model.js";
 import User from "../models/users.js";
 import { notifyOrganization, notifyRecordOpened } from "../utils/notify.js";
-import { workflowStepError } from "../utils/workflowGuard.js";
+import { editStepError, workflowStepError } from "../utils/workflowGuard.js";
+import { makeReturnHandler, notifyResubmitted } from "../utils/returnRecord.js";
 
 export const addCashPosition = async (req, res, next) => {
   try {
@@ -126,11 +127,9 @@ export const updateCashPosition = async (req, res, next) => {
       return next(error);
     }
 
-    if (record.status === "Reviewed" || record.status === "Approved") {
-      const error = new Error("You cannot edit a reviewed or approved record");
-      error.statusCode = 400;
-      return next(error);
-    }
+    const editError = editStepError(record, user, "edit");
+    if (editError) return next(editError);
+    const resubmitted = record.status === "Returned";
 
     // Allowed updates
     if (updates.as_at_date !== undefined)
@@ -140,7 +139,10 @@ export const updateCashPosition = async (req, res, next) => {
     if (updates.currency !== undefined) record.currency = updates.currency;
     if (updates.balance !== undefined) record.balance = updates.balance;
 
+    if (resubmitted) record.status = "Pending";
     await record.save();
+
+    if (resubmitted) await notifyResubmitted({ record, user: user, entityType: "cash", label: "Cash position" });
 
     res.status(200).json({
       success: true,
@@ -170,13 +172,8 @@ export const deleteCashPosition = async (req, res, next) => {
       return next(error);
     }
 
-    if (record.status === "Reviewed" || record.status === "Approved") {
-      const error = new Error(
-        "You cannot delete a reviewed or approved record",
-      );
-      error.statusCode = 400;
-      return next(error);
-    }
+    const editError = editStepError(record, user, "delete");
+    if (editError) return next(editError);
 
     await record.destroy();
 
@@ -319,3 +316,11 @@ export const markCashViewed = async (req, res, next) => {
     next(error);
   }
 };
+
+
+// PATCH /:id/return — send back to the data entry officer for correction.
+export const returnCashPosition = makeReturnHandler({
+  Model: Cash,
+  entityType: "cash",
+  label: "Cash position",
+});

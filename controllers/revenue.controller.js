@@ -2,7 +2,8 @@ import Revenue from "../models/revenue.model.js";
 import User from "../models/users.js";
 import Organization from "../models/organization.model.js";
 import { notifyOrganization, notifyRecordOpened } from "../utils/notify.js";
-import { workflowStepError } from "../utils/workflowGuard.js";
+import { editStepError, workflowStepError } from "../utils/workflowGuard.js";
+import { makeReturnHandler, notifyResubmitted } from "../utils/returnRecord.js";
 
 /**
  * Helper to compute retention + payment from C and rate
@@ -209,11 +210,9 @@ export const updateRevenue = async (req, res, next) => {
     }
 
     // No editing if Reviewed / Approved
-    if (record.status === "Reviewed" || record.status === "Approved") {
-      const error = new Error("You cannot edit a reviewed or approved record");
-      error.statusCode = 400;
-      return next(error);
-    }
+    const editError = editStepError(record, user, "edit");
+    if (editError) return next(editError);
+    const resubmitted = record.status === "Returned";
 
     // Map camelCase from frontend to DB columns
     if (updates.date !== undefined) {
@@ -241,7 +240,10 @@ export const updateRevenue = async (req, res, next) => {
     }
 
     // Ignore any direct attempts to set retention_amount / payment_amount
+    if (resubmitted) record.status = "Pending";
     await record.save();
+
+    if (resubmitted) await notifyResubmitted({ record, user: user, entityType: "revenue", label: "Revenue" });
 
     res.status(200).json({
       success: true,
@@ -276,13 +278,8 @@ export const deleteRevenue = async (req, res, next) => {
     }
 
     // No deleting if Reviewed / Approved
-    if (record.status === "Reviewed" || record.status === "Approved") {
-      const error = new Error(
-        "You cannot delete a reviewed or approved record"
-      );
-      error.statusCode = 400;
-      return next(error);
-    }
+    const editError = editStepError(record, user, "delete");
+    if (editError) return next(editError);
 
     await record.destroy();
 
@@ -430,3 +427,11 @@ export const markRevenueViewed = async (req, res, next) => {
     next(error);
   }
 };
+
+
+// PATCH /:id/return — send back to the data entry officer for correction.
+export const returnRevenue = makeReturnHandler({
+  Model: Revenue,
+  entityType: "revenue",
+  label: "Revenue",
+});

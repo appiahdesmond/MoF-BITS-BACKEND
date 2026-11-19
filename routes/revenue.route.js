@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { restrict } from "../middleware/restrict.js";
 import { protectRoutes } from "../middleware/routesProtect.js";
-import { addRevenue, approveRevenue, deleteRevenue, getAllRevenue, markRevenueViewed, reviewRevenue, updateRevenue } from "../controllers/revenue.controller.js";
+import { addRevenue, approveRevenue, deleteRevenue, getAllRevenue, markRevenueViewed, reviewRevenue, updateRevenue, returnRevenue } from "../controllers/revenue.controller.js";
 
 const router = Router();
 
@@ -15,6 +15,7 @@ router.delete("/:id", restrict("data_entry", "admin"), deleteRevenue);
 
 //reviewer
 router.patch("/:id/review", restrict("reviewer", "admin"), reviewRevenue);
+router.patch("/:id/return", restrict("reviewer", "approver", "admin"), returnRevenue);
 
 //approver
 router.patch("/:id/approve", restrict("approver", "admin"), approveRevenue);
