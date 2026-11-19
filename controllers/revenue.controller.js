@@ -1,6 +1,6 @@
 import Revenue from "../models/revenue.model.js";
 import User from "../models/users.js";
-import { organizationRetentionRate } from "../data/organizationRetentionRate.js";
+import Organization from "../models/organization.model.js";
 import { notifyOrganization, notifyRecordOpened } from "../utils/notify.js";
 
 /**
@@ -66,10 +66,11 @@ export const addRevenue = async (req, res, next) => {
     }
 
     // Get retention rate from organization
-    const retentionRate = organizationRetentionRate[user.organization];
-    if (!retentionRate && retentionRate !== 0) {
+    const org = await Organization.findOne({ where: { name: user.organization } });
+    const retentionRate = org?.retention_rate;
+    if (retentionRate === null || retentionRate === undefined) {
       const error = new Error(
-        "Retention rate not configured for this organization"
+        "Retention rate not configured for this organization. Ask an admin to set it under Console > Retention Rates."
       );
       error.statusCode = 400;
       return next(error);
