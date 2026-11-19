@@ -13,7 +13,7 @@ const router = Router();
 
 router.get("/", protectRoutes, restrict("admin"), getAllUsers);
 
-router.post("/", addUser);
+router.post("/", protectRoutes, restrict("admin"), addUser);
 
 router.get("/:id", protectRoutes, restrict("admin"), getUserById);
 

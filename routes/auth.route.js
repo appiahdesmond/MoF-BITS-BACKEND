@@ -11,11 +11,13 @@ import {
   updateProfile,
 } from "../controllers/auth.controller.js";
 import { protectRoutes } from "../middleware/routesProtect.js";
+import { restrict } from "../middleware/restrict.js";
 import { upload } from "../middleware/uploadProfile.js";
 
 const router = Router();
 
-router.post("/register", registerUser);
+// Accounts are created by admins only (Console > Users); never open self-registration.
+router.post("/register", protectRoutes, restrict("admin"), registerUser);
 
 router.post("/login", login);
 
