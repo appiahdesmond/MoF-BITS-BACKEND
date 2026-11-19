@@ -215,7 +215,7 @@ export function buildAlerts({ rows, liquidity, pending }) {
       "critical",
       "low_cash_cover",
       null,
-      `GHS cash covers about ${liquidity.months} month of current spending.`,
+      `GH₵ cash covers about ${liquidity.months} month of current spending.`,
     );
   }
 
@@ -292,7 +292,7 @@ export function buildInsights({ summary, liquidity, igf }) {
   const cash =
     liquidity.months === null
       ? "Cash cover cannot be worked out until there is recorded spending."
-      : `GHS cash covers about ${liquidity.months} months of current spending.`;
+      : `GH₵ cash covers about ${liquidity.months} months of current spending.`;
 
   return { execution, igf: igfLine, liquidity: cash };
 }

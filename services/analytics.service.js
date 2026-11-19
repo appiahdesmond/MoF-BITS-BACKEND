@@ -579,7 +579,7 @@ export async function getDashboardAnalyticsData({
       expectedPct: round2(timing.expectedFraction * 100),
       expectedBasis: "Appropriation spread evenly by day across the year",
       isInProgress: timing.isInProgress,
-      currencyNote: "Budget, expenditure and IGF are reported in GHS. The currency filter applies to cash only.",
+      currencyNote: "Budget, expenditure and IGF are reported in GH₵. The currency filter applies to cash only.",
     },
     summary,
     budgetExecution: {
