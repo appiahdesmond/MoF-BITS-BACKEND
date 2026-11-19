@@ -1,6 +1,7 @@
 import Cash from "../models/cash.model.js";
 import User from "../models/users.js";
 import { notifyOrganization, notifyRecordOpened } from "../utils/notify.js";
+import { workflowStepError } from "../utils/workflowGuard.js";
 
 export const addCashPosition = async (req, res, next) => {
   try {
@@ -208,6 +209,9 @@ export const reviewCashPosition = async (req, res, next) => {
       return next(error);
     }
 
+    const stepError = workflowStepError(cash, user, "review");
+    if (stepError) return next(stepError);
+
     if (cash.status !== "Pending") {
       const error = new Error("Only pending records can be reviewed");
       error.statusCode = 400;
@@ -255,6 +259,9 @@ export const approveCashPosition = async (req, res, next) => {
       error.statusCode = 404;
       return next(error);
     }
+
+    const stepError = workflowStepError(record, user, "approve");
+    if (stepError) return next(stepError);
 
     record.status = "Approved";
     record.approvedBy = user.name;

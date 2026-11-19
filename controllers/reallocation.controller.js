@@ -2,6 +2,7 @@ import Reallocation from "../models/reallocation.model.js";
 import User from "../models/users.js";
 import sequelize from "../config/database.js";
 import { notifyOrganization, notifyRecordOpened } from "../utils/notify.js";
+import { workflowStepError } from "../utils/workflowGuard.js";
 
 export const addReallocation = async (req, res, next) => {
   //declare variable later a value will be assigned to it
@@ -312,6 +313,9 @@ export const reviewReallocation = async (req, res, next) => {
       return next(error);
     }
 
+    const stepError = workflowStepError(record, user, "review");
+    if (stepError) return next(stepError);
+
     // Prevent re-review if already reviewed or approved
     if (record.status === "Reviewed" || record.status === "Approved") {
       const error = new Error("This record has already been reviewed");
@@ -369,6 +373,9 @@ export const approveReallocation = async (req, res, next) => {
       error.statusCode = 404;
       return next(error);
     }
+
+    const stepError = workflowStepError(record, user, "approve");
+    if (stepError) return next(stepError);
 
     //Must be reviewed first
     if (record.status !== "Reviewed") {

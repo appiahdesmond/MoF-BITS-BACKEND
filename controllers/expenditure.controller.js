@@ -4,6 +4,7 @@ import LoadedData from "../models/loadedData.js";
 import { Op } from "sequelize";
 import sequelize from "../config/database.js";
 import { notifyOrganization, notifyRecordOpened } from "../utils/notify.js";
+import { workflowStepError } from "../utils/workflowGuard.js";
 
 export const addExpenditure = async (req, res, next) => {
   const t = await sequelize.transaction();
@@ -481,6 +482,9 @@ export const approveExpenditure = async (req, res, next) => {
       return next(error);
     }
 
+    const stepError = workflowStepError(record, user, "approve");
+    if (stepError) return next(stepError);
+
     // Approver marks record as approved
     record.status = "Approved";
     record.approvedBy = user.name;
@@ -533,6 +537,9 @@ export const reviewExpenditure = async (req, res, next) => {
       error.statusCode = 404;
       return next(error);
     }
+
+    const stepError = workflowStepError(record, user, "review");
+    if (stepError) return next(stepError);
 
     // Prevent re-review if already reviewed or approved
     if (record.status === "Reviewed" || record.status === "Approved") {

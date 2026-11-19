@@ -2,6 +2,7 @@ import Revenue from "../models/revenue.model.js";
 import User from "../models/users.js";
 import Organization from "../models/organization.model.js";
 import { notifyOrganization, notifyRecordOpened } from "../utils/notify.js";
+import { workflowStepError } from "../utils/workflowGuard.js";
 
 /**
  * Helper to compute retention + payment from C and rate
@@ -309,6 +310,9 @@ export const approveRevenue = async (req, res, next) => {
       return next(error);
     }
 
+    const stepError = workflowStepError(record, user, "approve");
+    if (stepError) return next(stepError);
+
     record.status = "Approved";
     record.approvedBy = user.name;
     record.approvedAt = new Date();
@@ -359,6 +363,9 @@ export const reviewRevenue = async (req, res, next) => {
       error.statusCode = 404;
       return next(error);
     }
+
+    const stepError = workflowStepError(record, user, "review");
+    if (stepError) return next(stepError);
 
     if (record.status === "Reviewed" || record.status === "Approved") {
       const error = new Error("This record has already been reviewed");
