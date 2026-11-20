@@ -84,7 +84,7 @@ export async function resolveExecutivePeriod({ organization, year, month }) {
 }
 
 /** Monthly sums Jan..month with record counts, so empty months become null. */
-async function monthlySums(model, dateField, sums, organization, period) {
+async function monthlySums(model, dateField, sums, organization, period, extraWhere = {}) {
   const rows = await model.findAll({
     attributes: [
       [fn("MONTH", col(dateField)), "m"],
@@ -93,6 +93,7 @@ async function monthlySums(model, dateField, sums, organization, period) {
     ],
     where: {
       ...orgWhere(organization),
+      ...extraWhere,
       status: "Approved",
       [dateField]: { [Op.between]: [period.start, period.end] },
     },
@@ -255,11 +256,13 @@ export async function getExecutiveData({ organization, period }) {
     availableYears(organization),
   ]);
 
-  const expenditure = expSeries.map((r) => ({
+  const econMonthly = await monthlyByEconomic(organization, period);
+  const expenditure = expSeries.map((r, i) => ({
     month: r.month,
     records: r.records,
     expenditure: r.actualExpenditure,
     payments: r.actualPayment,
+    breakdown: r.records ? econMonthly[i + 1] || [] : [],
   }));
   const igf = igfSeries.map((r) => ({ month: r.month, records: r.records, collections: r.actual_collection }));
   const current = expenditure[period.month - 1];
@@ -306,4 +309,198 @@ export async function getExecutiveData({ organization, period }) {
     unverified,
     illustrative,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Expenditure Analysis (drill-down from the dashboard's Expenditure Trend)
+// ---------------------------------------------------------------------------
+const ECONOMIC = [
+  { key: "Compensation of Employees", short: "COE" },
+  { key: "Goods and Services", short: "G&S" },
+  { key: "Capital Expenditure", short: "CAPEX" },
+];
+const econKey = (raw) => {
+  const match = ECONOMIC.find((e) => e.key.toLowerCase() === String(raw || "").trim().toLowerCase());
+  return match ? match.key : "Others";
+};
+const FUND_KEYS = FUNDS.map((f) => f.key);
+export const normaliseSource = (value) => {
+  const v = String(value || "").toUpperCase();
+  return FUND_KEYS.includes(v) ? v : null;
+};
+
+/** Top 5 by amount with share of the whole (YTD). */
+async function topYtd(field, organization, period, sourceWhere) {
+  const rows = await BudgetExpenditure.findAll({
+    attributes: [[col(field), "name"], [fn("SUM", col("actualExpenditure")), "amount"]],
+    where: {
+      ...orgWhere(organization),
+      ...sourceWhere,
+      status: "Approved",
+      date: { [Op.between]: [period.start, period.end] },
+    },
+    group: [col(field)],
+    raw: true,
+  });
+  const total = rows.reduce((a, r) => a + (Number(r.amount) || 0), 0);
+  const items = rows
+    .map((r) => ({ name: r.name || "Unspecified", amount: round2(r.amount) }))
+    .filter((r) => r.amount > 0)
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 5)
+    .map((r) => ({ ...r, share: total > 0 ? round2((r.amount / total) * 100) : null }));
+  return { total: round2(total), top: items };
+}
+
+export async function getExpenditureAnalysis({ organization, period, source }) {
+  const sourceWhere = source ? { sourceOfFunding: source } : {};
+  const ytdRange = { [Op.between]: [period.start, period.end] };
+  const [series, budgetRows, actualRows, departments, naturalAccounts, unverified, illustrative, years] =
+    await Promise.all([
+      monthlySums(BudgetExpenditure, "date", ["actualExpenditure", "actualPayment"], organization, period, sourceWhere),
+      LoadedData.findAll({
+        attributes: ["economicClassification", "sourceOfFunding", [fn("SUM", col("appropriation")), "total"]],
+        where: { ...orgWhere(organization), ...sourceWhere, year: period.year },
+        group: ["economicClassification", "sourceOfFunding"],
+        raw: true,
+      }),
+      BudgetExpenditure.findAll({
+        attributes: [
+          "economicClassification",
+          "sourceOfFunding",
+          [fn("SUM", col("actualExpenditure")), "spent"],
+          [fn("SUM", col("actualPayment")), "paid"],
+        ],
+        where: { ...orgWhere(organization), ...sourceWhere, status: "Approved", date: ytdRange },
+        group: ["economicClassification", "sourceOfFunding"],
+        raw: true,
+      }),
+      topYtd(organization ? "activity" : "organization", organization, period, sourceWhere),
+      topYtd("naturalAccount", organization, period, sourceWhere),
+      unverifiedInMonth(organization, period),
+      hasIllustrativeData(organization, period),
+      availableYears(organization),
+    ]);
+
+  // Economic classification and funding source tables.
+  const econ = Object.fromEntries(
+    [...ECONOMIC.map((e) => e.key), "Others"].map((k) => [k, { approved: 0, actual: 0, payments: 0 }]),
+  );
+  const fund = Object.fromEntries(FUND_KEYS.map((k) => [k, { approved: 0, actual: 0 }]));
+  budgetRows.forEach((r) => {
+    const amount = Number(r.total) || 0;
+    econ[econKey(r.economicClassification)].approved += amount;
+    const f = String(r.sourceOfFunding || "").toUpperCase();
+    if (fund[f]) fund[f].approved += amount;
+  });
+  actualRows.forEach((r) => {
+    const spent = Number(r.spent) || 0;
+    const e = econ[econKey(r.economicClassification)];
+    e.actual += spent;
+    e.payments += Number(r.paid) || 0;
+    const f = String(r.sourceOfFunding || "").toUpperCase();
+    if (fund[f]) fund[f].actual += spent;
+  });
+
+  const row = (approved, actual, payments) => ({
+    approved: round2(approved),
+    actual: round2(actual),
+    payments: round2(payments),
+    unutilised: round2(approved - actual),
+    utilisationPct: approved > 0 ? round2((actual / approved) * 100) : null,
+    paymentRatePct: actual > 0 ? round2((payments / actual) * 100) : null,
+  });
+  const totals = Object.values(econ).reduce(
+    (a, e) => ({ approved: a.approved + e.approved, actual: a.actual + e.actual, payments: a.payments + e.payments }),
+    { approved: 0, actual: 0, payments: 0 },
+  );
+  const economic = [...ECONOMIC, { key: "Others", short: "Others" }]
+    .map((e) => ({
+      key: e.key,
+      short: e.short,
+      label: e.key === "Others" ? "Others" : `${e.key} (${e.short})`,
+      ...row(econ[e.key].approved, econ[e.key].actual, econ[e.key].payments),
+      share: totals.actual > 0 ? round2((econ[e.key].actual / totals.actual) * 100) : null,
+    }))
+    // "Others" only when something falls outside the three standard classes.
+    .filter((e) => e.key !== "Others" || e.approved || e.actual);
+
+  const econMonthly = await monthlyByEconomic(organization, period, sourceWhere);
+  const expenditure = series.map((r, i) => ({
+    month: r.month,
+    records: r.records,
+    expenditure: r.actualExpenditure,
+    payments: r.actualPayment,
+    breakdown: r.records ? econMonthly[i + 1] || [] : [],
+  }));
+  const current = expenditure[period.month - 1];
+  const prev = expenditure[period.month - 2];
+  const totalRow = row(totals.approved, totals.actual, totals.payments);
+
+  return {
+    period,
+    years: years.includes(period.year) ? years : [period.year, ...years].sort((a, b) => b - a),
+    source,
+    kpis: {
+      approvedBudget: totalRow.approved,
+      ytdExpenditure: totalRow.actual,
+      ytdPayments: totalRow.payments,
+      unutilised: totalRow.unutilised,
+      utilisationPct: totalRow.utilisationPct,
+      paymentRatePct: totalRow.paymentRatePct,
+      unutilisedPct: totals.approved > 0 ? round2((totalRow.unutilised / totals.approved) * 100) : null,
+      monthExpenditure: current?.records ? current.expenditure : null,
+      previousMonthExpenditure: prev?.records ? prev.expenditure : null,
+    },
+    series: { expenditure },
+    economic,
+    total: totalRow,
+    funding: FUNDS.filter((f) => !source || f.key === source).map(({ key, label }) => {
+      const { approved, actual, unutilised, utilisationPct } = row(fund[key].approved, fund[key].actual, 0);
+      return { key, label, approved, actual, unutilised, utilisationPct };
+    }),
+    contributors: {
+      groupBy: organization ? "activity" : "DAD",
+      departments,
+      naturalAccounts,
+    },
+    unverified,
+    illustrative,
+  };
+}
+
+/**
+ * Approved expenditure per month split by economic classification:
+ * { 1: [{ key, short, amount }, ...], 2: [...] } in COE, G&S, CAPEX, Others order.
+ */
+async function monthlyByEconomic(organization, period, extraWhere = {}) {
+  const rows = await BudgetExpenditure.findAll({
+    attributes: [
+      [fn("MONTH", col("date")), "m"],
+      "economicClassification",
+      [fn("SUM", col("actualExpenditure")), "amount"],
+    ],
+    where: {
+      ...orgWhere(organization),
+      ...extraWhere,
+      status: "Approved",
+      date: { [Op.between]: [period.start, period.end] },
+    },
+    group: [fn("MONTH", col("date")), "economicClassification"],
+    raw: true,
+  });
+  const order = [...ECONOMIC, { key: "Others", short: "Others" }];
+  const byMonth = {};
+  rows.forEach((r) => {
+    const m = Number(r.m);
+    const key = econKey(r.economicClassification);
+    byMonth[m] ??= {};
+    byMonth[m][key] = (byMonth[m][key] || 0) + (Number(r.amount) || 0);
+  });
+  return Object.fromEntries(
+    Object.entries(byMonth).map(([m, sums]) => [
+      m,
+      order.filter((e) => sums[e.key]).map((e) => ({ key: e.key, short: e.short, amount: round2(sums[e.key]) })),
+    ]),
+  );
 }

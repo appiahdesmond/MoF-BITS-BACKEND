@@ -4,7 +4,12 @@ import {
   getDashboardAnalyticsData,
   parseDashboardPeriod,
 } from "../services/analytics.service.js";
-import { getExecutiveData, resolveExecutivePeriod } from "../services/executive.service.js";
+import {
+  getExecutiveData,
+  getExpenditureAnalysis,
+  normaliseSource,
+  resolveExecutivePeriod,
+} from "../services/executive.service.js";
 
 export const getDashboardAnalytics = async (req, res, next) => {
   try {
@@ -81,6 +86,23 @@ export const getExecutiveAnalytics = async (req, res, next) => {
     const { organization, isAll } = resolveOrganizationScope({ user, organization: requested });
     const period = await resolveExecutivePeriod({ organization, year, month });
     const data = await getExecutiveData({ organization, period });
+    res.json({ success: true, organization: isAll ? "ALL" : organization, ...data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const getExpenditureAnalysisData = async (req, res, next) => {
+  try {
+    const user = await User.findByPk(req.user.id);
+    if (!user) {
+      return res.status(401).json({ success: false, message: "User not logged in" });
+    }
+    const { organization: requested, year, month, source } = req.query;
+    // Non-admins are always pinned to their own organisation.
+    const { organization, isAll } = resolveOrganizationScope({ user, organization: requested });
+    const period = await resolveExecutivePeriod({ organization, year, month });
+    const data = await getExpenditureAnalysis({ organization, period, source: normaliseSource(source) });
     res.json({ success: true, organization: isAll ? "ALL" : organization, ...data });
   } catch (err) {
     next(err);
