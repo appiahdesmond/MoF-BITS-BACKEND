@@ -7,6 +7,7 @@ import {
 import {
   getExecutiveData,
   getExpenditureAnalysis,
+  getIgfAnalysis,
   normaliseSource,
   resolveExecutivePeriod,
 } from "../services/executive.service.js";
@@ -103,6 +104,32 @@ export const getExpenditureAnalysisData = async (req, res, next) => {
     const { organization, isAll } = resolveOrganizationScope({ user, organization: requested });
     const period = await resolveExecutivePeriod({ organization, year, month });
     const data = await getExpenditureAnalysis({ organization, period, source: normaliseSource(source) });
+    res.json({ success: true, organization: isAll ? "ALL" : organization, ...data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const IGF_CATEGORIES = [
+  "Fees/Charges",
+  "Sale Of Goods and Services",
+  "Fines/Forfeitures",
+  "Licenses",
+  "Interests",
+  "Others",
+];
+
+export const getIgfAnalysisData = async (req, res, next) => {
+  try {
+    const user = await User.findByPk(req.user.id);
+    if (!user) {
+      return res.status(401).json({ success: false, message: "User not logged in" });
+    }
+    const { organization: requested, year, month, category } = req.query;
+    const { organization, isAll } = resolveOrganizationScope({ user, organization: requested });
+    const period = await resolveExecutivePeriod({ organization, year, month });
+    const cat = IGF_CATEGORIES.find((c) => c.toLowerCase() === String(category || "").toLowerCase()) || null;
+    const data = await getIgfAnalysis({ organization, period, category: cat });
     res.json({ success: true, organization: isAll ? "ALL" : organization, ...data });
   } catch (err) {
     next(err);

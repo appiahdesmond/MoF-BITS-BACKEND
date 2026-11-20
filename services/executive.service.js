@@ -244,6 +244,8 @@ const sumOf = (rows, key) => {
 };
 
 export async function getExecutiveData({ organization, period }) {
+  const igfTargetRows = await igfRows(organization, period.start, period.end, null);
+  const igfTarget = annualTargets(igfTargetRows);
   const [expSeries, igfSeries, cash, budget, ytdSource, contrib, unverified, illustrative, years] = await Promise.all([
     monthlySums(BudgetExpenditure, "date", ["actualExpenditure", "actualPayment"], organization, period),
     monthlySums(Revenue, "date", ["actual_collection"], organization, period),
@@ -296,6 +298,8 @@ export async function getExecutiveData({ organization, period }) {
       ytdExpenditure,
       ytdPayments,
       ytdIgf,
+      // Annual IGF target: latest budget projection per DAD + category (pro rata per month).
+      igfAnnualTarget: igfTarget.total > 0 ? round2(igfTarget.total) : null,
       budgetUtilisationPct:
         budget.total > 0 && ytdExpenditure !== null ? round2((ytdExpenditure / budget.total) * 100) : null,
       // Payments and expenditure over the same Jan..month window.
@@ -503,4 +507,179 @@ async function monthlyByEconomic(organization, period, extraWhere = {}) {
       order.filter((e) => sums[e.key]).map((e) => ({ key: e.key, short: e.short, amount: round2(sums[e.key]) })),
     ]),
   );
+}
+
+// ---------------------------------------------------------------------------
+// IGF Collection Analysis (drill-down from the dashboard's IGF Collection Trend)
+// ---------------------------------------------------------------------------
+// Annual target per DAD + category = its latest non-zero budget projection in the
+// year (the rule used elsewhere in BITS: IGF_TARGET_MODE "latest"). Monthly and
+// YTD targets are that annual figure spread evenly (pro rata) across the year.
+const MONTHS_IN_YEAR = 12;
+
+async function igfRows(organization, start, end, category) {
+  return Revenue.findAll({
+    attributes: [
+      "organization",
+      "revenue_category",
+      "date",
+      "actual_collection",
+      "budgetProjections",
+      "retention_amount",
+      "payment_amount",
+      "id",
+    ],
+    where: {
+      ...orgWhere(organization),
+      ...(category ? { revenue_category: category } : {}),
+      status: "Approved",
+      date: { [Op.between]: [start, end] },
+    },
+    order: [["date", "DESC"], ["id", "DESC"]],
+    raw: true,
+  });
+}
+
+/** Latest non-zero projection per DAD + category, summed by DAD and by category. */
+function annualTargets(rows) {
+  const seen = new Map();
+  rows.forEach((r) => {
+    const amount = Number(r.budgetProjections) || 0;
+    const key = `${r.organization}||${r.revenue_category}`;
+    if (amount > 0 && !seen.has(key)) seen.set(key, amount); // rows are newest first
+  });
+  const byOrg = {};
+  const byCategory = {};
+  let total = 0;
+  for (const [key, amount] of seen) {
+    const [org, cat] = key.split("||");
+    byOrg[org] = (byOrg[org] || 0) + amount;
+    byCategory[cat] = (byCategory[cat] || 0) + amount;
+    total += amount;
+  }
+  return { total, byOrg, byCategory, pairs: seen.size };
+}
+
+export async function getIgfAnalysis({ organization, period, category }) {
+  const { year, month } = period;
+  const prevYear = year - 1;
+  const prevEnd = monthEnd(prevYear, month);
+  const [rows, prevRows, series, unverified, illustrative, years] = await Promise.all([
+    igfRows(organization, period.start, period.end, category),
+    igfRows(organization, `${prevYear}-01-01`, prevEnd, category),
+    monthlySums(Revenue, "date", ["actual_collection"], organization, period, category ? { revenue_category: category } : {}),
+    unverifiedInMonth(organization, period),
+    hasIllustrativeData(organization, period),
+    availableYears(organization),
+  ]);
+
+  const sum = (list, field) => list.reduce((a, r) => a + (Number(r[field]) || 0), 0);
+  const targets = annualTargets(rows);
+  const prevTargets = annualTargets(prevRows);
+  const share = month / MONTHS_IN_YEAR;
+
+  const ytd = sum(rows, "actual_collection");
+  const prevYtd = sum(prevRows, "actual_collection");
+  const ytdTarget = targets.total * share;
+  const prevYtdTarget = prevTargets.total * share;
+  const performance = ytdTarget > 0 ? (ytd / ytdTarget) * 100 : null;
+  const prevPerformance = prevYtdTarget > 0 ? (prevYtd / prevYtdTarget) * 100 : null;
+
+  // Monthly actuals (null where nothing approved), pro-rata target and run-rate projection.
+  const actualMonths = series.map((r) => r.actual_collection);
+  const withData = actualMonths.filter((v) => v !== null);
+  const runRate = withData.length ? withData.reduce((a, b) => a + b, 0) / withData.length : null;
+  const monthlyTarget = targets.total > 0 ? targets.total / MONTHS_IN_YEAR : null;
+  const trend = Array.from({ length: MONTHS_IN_YEAR }, (_, i) => ({
+    month: MONTHS[i],
+    actual: i < month ? actualMonths[i] : null,
+    target: monthlyTarget === null ? null : round2(monthlyTarget),
+    projection: i >= month && runRate !== null ? round2(runRate) : null,
+  }));
+  // The projection line starts from the last actual month so the two join.
+  if (runRate !== null && month < MONTHS_IN_YEAR && actualMonths[month - 1] !== null) {
+    trend[month - 1].projection = actualMonths[month - 1];
+  }
+  const projectedYear = runRate !== null ? ytd + runRate * (MONTHS_IN_YEAR - month) : null;
+
+  // By revenue category.
+  const catTotals = {};
+  rows.forEach((r) => {
+    catTotals[r.revenue_category] = (catTotals[r.revenue_category] || 0) + (Number(r.actual_collection) || 0);
+  });
+  const categories = Object.entries(catTotals)
+    .map(([key, amount]) => {
+      const catTarget = (targets.byCategory[key] || 0) * share;
+      return {
+        key,
+        short: key,
+        label: key,
+        actual: round2(amount),
+        share: ytd > 0 ? round2((amount / ytd) * 100) : null,
+        ytdTarget: catTarget > 0 ? round2(catTarget) : null,
+        achievementPct: catTarget > 0 ? round2((amount / catTarget) * 100) : null,
+      };
+    })
+    .filter((c) => c.actual > 0)
+    .sort((a, b) => b.actual - a.actual);
+
+  // Performance table: by DAD, or by category within one DAD.
+  const groupField = organization ? "revenue_category" : "organization";
+  const actualBy = {};
+  rows.forEach((r) => {
+    const k = r[groupField];
+    actualBy[k] = (actualBy[k] || 0) + (Number(r.actual_collection) || 0);
+  });
+  const targetBy = organization ? targets.byCategory : targets.byOrg;
+  const performanceRows = [...new Set([...Object.keys(actualBy), ...Object.keys(targetBy)])]
+    .map((name) => {
+      const annual = targetBy[name] || 0;
+      const target = annual * share;
+      const actual = actualBy[name] || 0;
+      return {
+        name,
+        annualTarget: round2(annual),
+        ytdTarget: round2(target),
+        actual: round2(actual),
+        performancePct: target > 0 ? round2((actual / target) * 100) : null,
+        variance: round2(actual - target),
+      };
+    })
+    // Ranked by performance against target; rows without a target go last.
+    .sort((a, b) => (b.performancePct ?? -Infinity) - (a.performancePct ?? -Infinity) || b.actual - a.actual);
+
+  const paid = sum(rows, "payment_amount");
+  const retained = sum(rows, "retention_amount");
+
+  return {
+    period,
+    years: years.includes(year) ? years : [year, ...years].sort((a, b) => b - a),
+    category,
+    kpis: {
+      annualTarget: targets.total > 0 ? round2(targets.total) : null,
+      ytdCollections: rows.length ? round2(ytd) : null,
+      previousYtdCollections: prevRows.length ? round2(prevYtd) : null,
+      growthPct: prevYtd > 0 && rows.length ? round2(((ytd - prevYtd) / prevYtd) * 100) : null,
+      ytdTarget: targets.total > 0 ? round2(ytdTarget) : null,
+      performancePct: performance === null ? null : round2(performance),
+      previousPerformancePct: prevPerformance === null ? null : round2(prevPerformance),
+      variance: targets.total > 0 ? round2(ytd - ytdTarget) : null,
+      variancePct: ytdTarget > 0 ? round2(((ytd - ytdTarget) / ytdTarget) * 100) : null,
+      monthCollections: series[month - 1]?.records ? series[month - 1].actual_collection : null,
+      previousMonthCollections: month > 1 && series[month - 2]?.records ? series[month - 2].actual_collection : null,
+    },
+    trend,
+    outlook: {
+      runRate: runRate === null ? null : round2(runRate),
+      monthsWithData: withData.length,
+      projectedYear: projectedYear === null ? null : round2(projectedYear),
+      projectedVsTargetPct:
+        projectedYear !== null && targets.total > 0 ? round2(((projectedYear - targets.total) / targets.total) * 100) : null,
+    },
+    categories,
+    performance: { groupBy: organization ? "category" : "DAD", rows: performanceRows },
+    distribution: { collected: round2(ytd), paidToFund: round2(paid), retained: round2(retained) },
+    unverified,
+    illustrative,
+  };
 }
