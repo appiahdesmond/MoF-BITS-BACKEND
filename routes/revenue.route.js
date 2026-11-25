@@ -1,3 +1,4 @@
+import { requirePage } from "../utils/pageAccess.js";
 import { Router } from "express";
 import { restrict } from "../middleware/restrict.js";
 import { protectRoutes } from "../middleware/routesProtect.js";
@@ -6,6 +7,8 @@ import { addRevenue, approveRevenue, deleteRevenue, getAllRevenue, markRevenueVi
 const router = Router();
 
 router.use(protectRoutes);
+// Only roles allowed to open this page (Console › Roles & Permissions).
+router.use(requirePage("revenue"));
 
 router.post("/", restrict("data_entry", "admin"), addRevenue);
 

@@ -4,6 +4,7 @@ import Organization from "../models/organization.model.js";
 import { notifyOrganization, notifyRecordOpened } from "../utils/notify.js";
 import { editStepError, workflowStepError } from "../utils/workflowGuard.js";
 import { makeReturnHandler, notifyResubmitted } from "../utils/returnRecord.js";
+import { retentionRateOn } from "../utils/retentionRate.js";
 
 /**
  * Helper to compute retention + payment from C and rate
@@ -67,12 +68,12 @@ export const addRevenue = async (req, res, next) => {
       return next(error);
     }
 
-    // Get retention rate from organization
+    // Retention rate in force on the collection date (rates can change over time).
     const org = await Organization.findOne({ where: { name: user.organization } });
-    const retentionRate = org?.retention_rate;
+    const retentionRate = org ? await retentionRateOn(org, date) : null;
     if (retentionRate === null || retentionRate === undefined) {
       const error = new Error(
-        "Retention rate not configured for this organization. Ask an admin to set it under Console > Retention Rates."
+        "Retention rate not configured for this organization. Ask an admin to set it under System Management > Financial Configuration > IGF Retention Management."
       );
       error.statusCode = 400;
       return next(error);

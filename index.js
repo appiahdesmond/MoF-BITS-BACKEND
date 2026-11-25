@@ -22,6 +22,9 @@ import reallocationReportRoute from "./routes/reallocationReport.route.js";
 import analyticsRoute from "./routes/analytics.route.js";
 import notificationRoute from "./routes/notification.route.js";
 import organizationRoute from "./routes/organization.route.js";
+import rolesRoute from "./routes/roles.route.js";
+import { protectRoutes } from "./middleware/routesProtect.js";
+import { requirePage } from "./utils/pageAccess.js";
 
 const PORT = process.env.PORT || 7005;
 
@@ -45,21 +48,22 @@ app.use(cookieParser());
 app.use("/api/auth", authRoute);
 app.use("/api/users", userRoute);
 app.use("/api/expense", expenditureRoute);
-app.use("/api/reports", reportRoute);
+app.use("/api/reports", protectRoutes, requirePage("reports"), reportRoute);
 app.use("/api/revenue", revenueRoute);
-app.use("/api/revenueReport", revenueReportRoute);
+app.use("/api/revenueReport", protectRoutes, requirePage("reports"), revenueReportRoute);
 app.use("/api/loadedData", loadedDataRoute);
 app.use("/api/budget", budgetRoute);
 app.use("/api/appropriation", appropriationRoute);
 app.use("/api/cash", cashRoute);
-app.use("/api/cashReport", cashReportRoute);
+app.use("/api/cashReport", protectRoutes, requirePage("reports"), cashReportRoute);
 app.use("/api/activity", activityRoute);
 app.use("/api/reallocation", reallocationRoute);
-app.use("/api/naturalAccount", naturalAccountRoute);
-app.use("/api/reallocationReport", reallocationReportRoute);
+app.use("/api/naturalAccount", protectRoutes, requirePage("reports"), naturalAccountRoute);
+app.use("/api/reallocationReport", protectRoutes, requirePage("reports"), reallocationReportRoute);
 app.use("/api/analytics", analyticsRoute);
 app.use("/api/notifications", notificationRoute);
 app.use("/api/organizations", organizationRoute);
+app.use("/api/roles", rolesRoute);
 
 //middleware
 app.use(notFound);

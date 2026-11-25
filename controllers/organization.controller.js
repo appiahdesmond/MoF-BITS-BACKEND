@@ -2,6 +2,7 @@ import { QueryTypes } from "sequelize";
 import sequelize from "../config/database.js";
 import Organization, { RetentionRateChange } from "../models/organization.model.js";
 import User from "../models/users.js";
+import { changesByOrganization, rateOn, ratePeriods, today } from "../utils/retentionRate.js";
 
 // Every table that stores an organisation by name. Renames are cascaded to all of
 // them, and an organisation can only be deleted when none of them reference it.
@@ -57,13 +58,26 @@ export const listOrganizations = async (req, res, next) => {
       );
       userCounts = Object.fromEntries(rows.map((r) => [r.organization, Number(r.n)]));
     }
-    res.status(200).json({
-      success: true,
-      data: organizations.map((org) => ({
+    // Rates come from the change history: the current rate is the one in force today,
+    // and rate_periods lets forms pick the rate for a record's own date.
+    const history = await changesByOrganization();
+    const now = today();
+    const data = [];
+    for (const org of organizations) {
+      const periods = ratePeriods(history[org.id] || [], org.retention_rate);
+      const current = rateOn(periods, now);
+      // Keep the stored rate in step once a scheduled change takes effect.
+      if (current !== org.retention_rate) await org.update({ retention_rate: current });
+      const next = periods.find((p) => p.from && p.from > now);
+      data.push({
         ...org.toJSON(),
+        retention_rate: current,
+        rate_periods: periods,
+        scheduled_rate: next ? { rate: next.rate, effective_date: next.from } : null,
         ...(req.user?.role === "admin" && { user_count: userCounts[org.name] || 0 }),
-      })),
-    });
+      });
+    }
+    res.status(200).json({ success: true, data });
   } catch (error) {
     next(error);
   }
@@ -97,6 +111,7 @@ export const createOrganization = async (req, res, next) => {
             new_rate: rate,
             note: "Initial rate",
             changed_by: req.user.id,
+            effective_date: today(),
           },
           { transaction },
         );
@@ -181,8 +196,10 @@ export const deleteOrganization = async (req, res, next) => {
   }
 };
 
-// PUT /api/organizations/:id/retention-rate — sets the rate and logs the change.
-// Existing revenue records keep the rate they were created with.
+// PUT /api/organizations/:id/retention-rate
+//   { rate, effectiveDate, approvalReference, reason }
+// Records a rate change that applies to revenue collected from the effective date.
+// Revenue records already saved keep the rate they were saved with.
 export const updateRetentionRate = async (req, res, next) => {
   try {
     const org = await Organization.findByPk(req.params.id);
@@ -191,23 +208,44 @@ export const updateRetentionRate = async (req, res, next) => {
     const { rate, error } = parseRate(req.body.rate);
     if (error) return fail(next, 400, error);
     if (rate === null) return fail(next, 400, "Retention rate is required");
-    if (rate === org.retention_rate) {
-      return fail(next, 400, `${org.name} is already at ${rate}%`);
+
+    const effectiveDate = String(req.body.effectiveDate ?? "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate) || Number.isNaN(Date.parse(effectiveDate))) {
+      return fail(next, 400, "Effective date is required (YYYY-MM-DD)");
     }
-    const note = String(req.body.note ?? "").trim() || null;
+    const approvalReference = String(req.body.approvalReference ?? "").trim();
+    if (!approvalReference) return fail(next, 400, "Approval reference is required");
+    if (approvalReference.length > 100) {
+      return fail(next, 400, "Approval reference must be 100 characters or fewer");
+    }
+    const reason = String(req.body.reason ?? req.body.note ?? "").trim();
+    if (!reason) return fail(next, 400, "Reason for change is required");
+    if (reason.length > 255) return fail(next, 400, "Reason must be 255 characters or fewer");
+
+    const before = ratePeriods((await changesByOrganization([org.id]))[org.id] || [], org.retention_rate);
+    const rateThen = rateOn(before, effectiveDate);
+    if (rate === rateThen) {
+      return fail(next, 400, `${org.name} is already at ${rate}% on ${effectiveDate}`);
+    }
 
     await sequelize.transaction(async (transaction) => {
       await RetentionRateChange.create(
         {
           organization_id: org.id,
-          old_rate: org.retention_rate,
+          old_rate: rateThen,
           new_rate: rate,
-          note,
+          note: reason,
+          approval_reference: approvalReference,
+          effective_date: effectiveDate,
           changed_by: req.user.id,
         },
         { transaction },
       );
-      await org.update({ retention_rate: rate }, { transaction });
+      const after = ratePeriods(
+        (await RetentionRateChange.findAll({ where: { organization_id: org.id }, transaction })) || [],
+        org.retention_rate,
+      );
+      await org.update({ retention_rate: rateOn(after, today()) }, { transaction });
     });
 
     res.status(200).json({ success: true, data: org });
@@ -227,10 +265,33 @@ export const listRetentionRateChanges = async (req, res, next) => {
         { model: Organization, attributes: ["id", "name"] },
         { model: User, as: "changedBy", attributes: ["id", "name", "username"] },
       ],
-      order: [["created_at", "DESC"]],
+      order: [
+        ["effective_date", "DESC"],
+        ["created_at", "DESC"],
+      ],
       limit: 200,
     });
-    res.status(200).json({ success: true, data: changes });
+    // The rate each change replaced, worked out from effective dates, so a backdated
+    // change shows correctly against the changes around it.
+    const all = await changesByOrganization([...new Set(changes.map((c) => c.organization_id))]);
+    const previous = {};
+    Object.values(all).forEach((list) => {
+      const sorted = [...list].sort(
+        (x, y) => String(x.effective_date).localeCompare(String(y.effective_date)) || x.id - y.id,
+      );
+      sorted.forEach((c, i) => {
+        previous[c.id] = i === 0 ? c.old_rate : sorted[i - 1].new_rate;
+      });
+    });
+    const now = today();
+    res.status(200).json({
+      success: true,
+      data: changes.map((c) => ({
+        ...c.toJSON(),
+        previous_rate: previous[c.id] ?? c.old_rate,
+        scheduled: String(c.effective_date) > now,
+      })),
+    });
   } catch (error) {
     next(error);
   }

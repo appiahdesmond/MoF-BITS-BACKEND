@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { protectRoutes } from "../middleware/routesProtect.js";
+import { requirePage } from "../utils/pageAccess.js";
 import {
   getDashboardAnalytics,
   getExecutiveAnalytics,
@@ -9,9 +10,9 @@ import {
 
 const router = Router();
 
-router.get("/dashboard", protectRoutes, getDashboardAnalytics);
-router.get("/executive", protectRoutes, getExecutiveAnalytics);
-router.get("/expenditure", protectRoutes, getExpenditureAnalysisData);
-router.get("/igf", protectRoutes, getIgfAnalysisData);
+router.get("/dashboard", protectRoutes, requirePage("dashboard"), getDashboardAnalytics);
+router.get("/executive", protectRoutes, requirePage("dashboard"), getExecutiveAnalytics);
+router.get("/expenditure", protectRoutes, requirePage("expenditureAnalysis"), getExpenditureAnalysisData);
+router.get("/igf", protectRoutes, requirePage("igfAnalysis"), getIgfAnalysisData);
 
 export default router;

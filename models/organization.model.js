@@ -36,8 +36,11 @@ export const RetentionRateChange = sequelize.define(
     organization_id: { type: DataTypes.INTEGER, allowNull: false },
     old_rate: { type: DataTypes.INTEGER, allowNull: true },
     new_rate: { type: DataTypes.INTEGER, allowNull: false },
-    note: { type: DataTypes.STRING, allowNull: true },
+    note: { type: DataTypes.STRING, allowNull: true }, // reason for the change
     changed_by: { type: DataTypes.INTEGER, allowNull: true },
+    // The rate applies to revenue collected from this date.
+    effective_date: { type: DataTypes.DATEONLY, allowNull: false },
+    approval_reference: { type: DataTypes.STRING(100), allowNull: true },
   },
   { tableName: "retention_rate_changes", timestamps: true, underscored: true },
 );

@@ -1,3 +1,4 @@
+import { requirePage } from "../utils/pageAccess.js";
 import { Router } from "express";
 import { restrict } from "../middleware/restrict.js";
 import { protectRoutes } from "../middleware/routesProtect.js";
@@ -6,6 +7,8 @@ import { addReallocation, approveReallocation, deleteReallocation, getAllRealloc
 const router = Router();
 
 router.use(protectRoutes);
+// Only roles allowed to open this page (Console › Roles & Permissions).
+router.use(requirePage("reallocation"));
 
 router.post("/", restrict("data_entry", "admin"), addReallocation);
 

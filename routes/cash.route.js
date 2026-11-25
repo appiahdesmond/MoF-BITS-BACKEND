@@ -1,3 +1,4 @@
+import { requirePage } from "../utils/pageAccess.js";
 import { Router } from "express";
 import { restrict } from "../middleware/restrict.js";
 import { protectRoutes } from "../middleware/routesProtect.js";
@@ -7,6 +8,8 @@ const router = Router();
 
 // every request must have a token or user must be logged in.
 router.use(protectRoutes);
+// Only roles allowed to open this page (Console › Roles & Permissions).
+router.use(requirePage("cash"));
 
 router.post("/", restrict("data_entry", "admin"), addCashPosition);
 
