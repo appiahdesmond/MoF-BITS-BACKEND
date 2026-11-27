@@ -1,13 +1,16 @@
+import { seesAllDads } from "./dataScope.js";
+
 export const resolveOrganizationScope = ({ user, organization }) => {
-  // Non-admins are ALWAYS restricted
-  if (user.role !== "admin") {
+  // Users without a ministry-wide scope (administrators, data scope "all") are
+  // always restricted to their own DAD.
+  if (!seesAllDads(user)) {
     return {
       organization: user.organization,
       isAll: false,
     };
   }
 
-  // Admin requesting ALL
+  // Requesting ALL
   if (!organization || organization === "ALL") {
     return {
       organization: null, // null = no filter
@@ -15,7 +18,7 @@ export const resolveOrganizationScope = ({ user, organization }) => {
     };
   }
 
-  // Admin requesting specific org
+  // Requesting one DAD
   return {
     organization,
     isAll: false,

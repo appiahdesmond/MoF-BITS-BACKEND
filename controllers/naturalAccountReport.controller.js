@@ -6,6 +6,7 @@ import { resolveOrganizationScope } from "../utils/resolveOrganizationScope.js";
 import { generateNaturalAccountPDF } from "../utils/naturalAccountReport.pdf.js";
 import { getQuarterPeriod } from "../utils/quarterPeriod.js";
 import ExcelJS from "exceljs";
+import { seesAllDads } from "../utils/dataScope.js";
 
 
 export const getNaturalAccountReport = async (req, res, next) => {
@@ -83,7 +84,7 @@ export const exportNaturalAccountPDF = async (req, res, next) => {
     // =========================
     // SECURITY
     // =========================
-    if (user.role !== "admin" && organization === "ALL") {
+    if (!seesAllDads(user) && organization === "ALL") {
       return res.status(403).json({
         success: false,
         message: "You are not allowed to access all organizations",
@@ -185,7 +186,7 @@ export const exportNaturalAccountExcel = async (req, res, next) => {
 
     const user = await User.findByPk(req.user.id);
 
-    if (user.role !== "admin" && organization === "ALL") {
+    if (!seesAllDads(user) && organization === "ALL") {
       return res.status(403).json({
         message: "You are not allowed to access all organizations",
       });

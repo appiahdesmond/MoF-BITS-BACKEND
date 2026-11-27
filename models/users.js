@@ -19,8 +19,24 @@ const User = sequelize.define(
     username: { type: DataTypes.STRING, allowNull: false, unique: true },
     phone: { type: DataTypes.STRING, allowNull: true },
     role: {
-      type: DataTypes.ENUM("admin", "data_entry", "approver", "reviewer"),
+      type: DataTypes.ENUM(
+        "admin",
+        "data_entry",
+        "approver",
+        "reviewer",
+        "pcmed_reviewer",
+        "pcmed_approver",
+        "minister",
+        "deputy_minister",
+        "chief_director",
+      ),
       defaultValue: "data_entry",
+    },
+    // Which DADs' records the user works on: own organisation, assigned DADs, or all.
+    data_scope: {
+      type: DataTypes.ENUM("own", "assigned", "all"),
+      allowNull: false,
+      defaultValue: "own",
     },
     status: {
       type: DataTypes.ENUM("active", "inactive", "suspended"),

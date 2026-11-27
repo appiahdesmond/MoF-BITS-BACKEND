@@ -1,5 +1,6 @@
 import LoadedData from "../models/loadedData.js";
 import { fn, col } from "sequelize";
+import { seesAllDads } from "../utils/dataScope.js";
 
 export async function getAppropriationData({
   year,
@@ -12,7 +13,7 @@ export async function getAppropriationData({
     ...(sourceOfFunding !== "ALL" && { sourceOfFunding }),
   };
 
-  if (user.role !== "admin") {
+  if (!seesAllDads(user)) {
     where.organization = user.organization;
   } else if (organization) {
     where.organization = organization;

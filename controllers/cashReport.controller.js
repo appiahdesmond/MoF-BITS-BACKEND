@@ -13,6 +13,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { getDetailedCashData } from "../services/detailedCashReport.service.js";
 import { getQuarterDateRange } from "../utils/cashDateQuarter.js";
+import { seesAllDads } from "../utils/dataScope.js";
 
 export const getCashPositionReport = async (req, res, next) => {
   try {
@@ -40,7 +41,7 @@ export const getCashPositionReport = async (req, res, next) => {
 
     const user = await User.findByPk(req.user.id);
 
-    if (user.role !== "admin" && organization === "ALL") {
+    if (!seesAllDads(user) && organization === "ALL") {
       return res.status(403).json({
         success: false,
         message: "You are not allowed to access all organizations",
@@ -90,7 +91,7 @@ export const exportCashPositionExcel = async (req, res, next) => {
 
     const user = await User.findByPk(req.user.id);
 
-    if (user.role !== "admin" && organization === "ALL") {
+    if (!seesAllDads(user) && organization === "ALL") {
       return res.status(403).json({
         success: false,
         message: "You are not allowed to access all organizations",
@@ -199,7 +200,7 @@ export const exportCashPositionPDF = async (req, res, next) => {
 
     const user = await User.findByPk(req.user.id);
 
-    if (user.role !== "admin" && organization === "ALL") {
+    if (!seesAllDads(user) && organization === "ALL") {
       return res.status(403).json({
         success: false,
         message: "You are not allowed to access all organizations",
@@ -264,7 +265,7 @@ export const getDetailedCashReport = async (req, res, next) => {
       });
     }
 
-    if (user.role !== "admin" && organization === "ALL") {
+    if (!seesAllDads(user) && organization === "ALL") {
       return res.status(403).json({
         success: false,
         message: "You are not allowed to access all organizations",

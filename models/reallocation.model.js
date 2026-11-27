@@ -73,8 +73,25 @@ const Reallocation = sequelize.define(
       onUpdate: "CASCADE",
       onDelete: "SET NULL", // or "CASCADE" if you want child rows deleted too
     },
+    // PCMED review and final approval (after the DAD approves).
+    pcmedReviewedBy: { type: DataTypes.STRING, allowNull: true },
+    pcmedReviewedById: { type: DataTypes.INTEGER, allowNull: true },
+    pcmedReviewedAt: { type: DataTypes.DATE, allowNull: true },
+    pcmedReviewComment: { type: DataTypes.TEXT, allowNull: true },
+    pcmedApprovedBy: { type: DataTypes.STRING, allowNull: true },
+    pcmedApprovedById: { type: DataTypes.INTEGER, allowNull: true },
+    pcmedApprovedAt: { type: DataTypes.DATE, allowNull: true },
+    pcmedApprovalComment: { type: DataTypes.TEXT, allowNull: true },
     status: {
-      type: DataTypes.ENUM("Pending", "Reviewed", "Approved", "Returned"),
+      type: DataTypes.ENUM(
+        "Pending",
+        "Reviewed",
+        "Approved",
+        "Returned",
+        "PendingPCMEDReview",
+        "PendingPCMEDApproval",
+        "ReturnedByPCMED",
+      ),
       defaultValue: "Pending",
       allowNull: false,
     },

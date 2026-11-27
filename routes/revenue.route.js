@@ -1,6 +1,6 @@
 import { requirePage } from "../utils/pageAccess.js";
 import { Router } from "express";
-import { restrict } from "../middleware/restrict.js";
+import { requirePermission } from "../utils/permissions.js";
 import { protectRoutes } from "../middleware/routesProtect.js";
 import { addRevenue, approveRevenue, deleteRevenue, getAllRevenue, markRevenueViewed, reviewRevenue, updateRevenue, returnRevenue } from "../controllers/revenue.controller.js";
 
@@ -10,20 +10,20 @@ router.use(protectRoutes);
 // Only roles allowed to open this page (Console › Roles & Permissions).
 router.use(requirePage("revenue"));
 
-router.post("/", restrict("data_entry", "admin"), addRevenue);
+router.post("/", requirePermission("records.create"), addRevenue);
 
-router.put("/:id", restrict("data_entry", "admin"), updateRevenue);
+router.put("/:id", requirePermission("records.edit"), updateRevenue);
 
-router.delete("/:id", restrict("data_entry", "admin"), deleteRevenue);
+router.delete("/:id", requirePermission("records.edit"), deleteRevenue);
 
 //reviewer
-router.patch("/:id/review", restrict("reviewer", "admin"), reviewRevenue);
-router.patch("/:id/return", restrict("reviewer", "approver", "admin"), returnRevenue);
+router.patch("/:id/review", requirePermission("records.review"), reviewRevenue);
+router.patch("/:id/return", requirePermission("records.return"), returnRevenue);
 
 //approver
-router.patch("/:id/approve", restrict("approver", "admin"), approveRevenue);
+router.patch("/:id/approve", requirePermission("records.approve"), approveRevenue);
 
-router.post("/:id/view", restrict("reviewer", "approver", "admin"), markRevenueViewed);
+router.post("/:id/view", requirePermission("records.review", "records.approve"), markRevenueViewed);
 
 router.get("/", getAllRevenue);
 

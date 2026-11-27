@@ -1,6 +1,7 @@
 // "Return for correction": shared handler for revenue, cash, expenditure and reallocation.
 import { workflowStepError } from "./workflowGuard.js";
 import { notifyOrganization } from "./notify.js";
+import { logWorkflowEvent } from "./workflowLog.js";
 
 const MAX_REASON = 1000;
 
@@ -31,11 +32,21 @@ export function makeReturnHandler({ Model, entityType, label }) {
       const stepError = workflowStepError(record, user, "return");
       if (stepError) return next(stepError);
 
+      const previousStatus = record.status;
       record.status = "Returned";
       record.returnReason = reason;
       record.returnedBy = user.name;
       record.returnedAt = new Date();
       await record.save();
+      await logWorkflowEvent({
+        entityType,
+        record,
+        action: "dad_returned",
+        from: previousStatus,
+        to: "Returned",
+        comment: reason,
+        user,
+      });
 
       try {
         await notifyOrganization({

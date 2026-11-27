@@ -2,6 +2,7 @@ import BudgetExpenditure from "../models/expenditure.model.js";
 import Revenue from "../models/revenue.model.js";
 import User from "../models/users.js";
 import { Op, fn, col } from "sequelize";
+import { seesAllDads } from "../utils/dataScope.js";
 
 
 
@@ -30,7 +31,7 @@ export async function getQuarterlyReportData({
     where.sourceOfFunding = sourceOfFunding;
   }
 
-  if (user.role !== "admin") {
+  if (!seesAllDads(user)) {
     where.organization = user.organization;
   } else if (organization && organization !== "ALL") {
     where.organization = organization;

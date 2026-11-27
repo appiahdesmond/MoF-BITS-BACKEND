@@ -8,6 +8,7 @@ import { getQuarterPeriod } from "../utils/quarterPeriod.js";
 import { resolveOrganizationScope } from "../utils/resolveOrganizationScope.js";
 import { buildEconomicReport } from "../services/economicReport.service.js";
 import { getDetailedECReport } from "../services/detailedReport.service.js";
+import { seesAllDads } from "../utils/dataScope.js";
 
 
 export const getQuarterlyReport = async (req, res, next) => {
@@ -26,7 +27,7 @@ export const getQuarterlyReport = async (req, res, next) => {
 
     const user = await User.findByPk(req.user.id);
 
-    if (user.role !== "admin" && organization === "ALL") {
+    if (!seesAllDads(user) && organization === "ALL") {
       return res.status(403).json({
         message: "You are not allowed to access all organizations",
       });
@@ -106,7 +107,7 @@ export const exportQuarterlyReportExcel = async (req, res, next) => {
 
     const user = await User.findByPk(req.user.id);
 
-    if (user.role !== "admin" && organization === "ALL") {
+    if (!seesAllDads(user) && organization === "ALL") {
       return res.status(403).json({
         message: "You are not allowed to access all organizations",
       });
@@ -285,7 +286,7 @@ export const exportQuarterlyReportPDF = async (req, res, next) => {
     const user = await User.findByPk(req.user.id);
 
     // Security: non-admins cannot request ALL
-    if (user.role !== "admin" && organization === "ALL") {
+    if (!seesAllDads(user) && organization === "ALL") {
       return res.status(403).json({
         success: false,
         message: "You are not allowed to access all organizations",
@@ -390,7 +391,7 @@ export const getDetailedEC = async (req, res, next) => {
     const user = await User.findByPk(req.user.id);
 
     //  Enforce admin rule
-    if (user.role !== "admin" && organization === "ALL") {
+    if (!seesAllDads(user) && organization === "ALL") {
       return res.status(403).json({
         success: false,
         message: "You are not allowed to access all organizations",

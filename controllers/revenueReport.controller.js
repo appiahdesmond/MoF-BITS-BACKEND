@@ -10,6 +10,7 @@ import {
 } from "../services/report.service.js";
 import { resolveOrganizationScope } from "../utils/resolveOrganizationScope.js";
 import { getDetailedRevenueData } from "../services/detailedRevenueReport.service.js";
+import { seesAllDads } from "../utils/dataScope.js";
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -30,7 +31,7 @@ export const getQuarterlyRevenueReport = async (req, res, next) => {
 
    const user = await User.findByPk(req.user.id);
 
-   if (user.role !== "admin" && organization === "ALL") {
+   if (!seesAllDads(user) && organization === "ALL") {
      return res.status(403).json({
        success: false,
        message: "You are not allowed to access all organizations",
@@ -87,7 +88,7 @@ export const exportQuarterlyRevenueExcel = async (req, res, next) => {
     //Get logged-in user
     const user = await User.findByPk(req.user.id);
 
-    if (user.role !== "admin" && organization === "ALL") {
+    if (!seesAllDads(user) && organization === "ALL") {
       return res.status(403).json({
         success: false,
         message: "You are not allowed to access all organizations",
@@ -207,7 +208,7 @@ export const exportQuarterlyRevenuePDF = async (req, res, next) => {
 
     const user = await User.findByPk(req.user.id);
 
-    if (user.role !== "admin" && organization === "ALL") {
+    if (!seesAllDads(user) && organization === "ALL") {
       return res.status(403).json({
         success: false,
         message: "You are not allowed to access all organizations",
@@ -275,7 +276,7 @@ export const getDetailedRevenueReport = async (req, res, next) => {
     }
 
     // Only admin can request ALL
-    if (user.role !== "admin" && organization === "ALL") {
+    if (!seesAllDads(user) && organization === "ALL") {
       return res.status(403).json({
         success: false,
         message: "You are not allowed to access all organizations",

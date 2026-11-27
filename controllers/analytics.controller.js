@@ -11,6 +11,7 @@ import {
   normaliseSource,
   resolveExecutivePeriod,
 } from "../services/executive.service.js";
+import { seesAllDads } from "../utils/dataScope.js";
 
 export const getDashboardAnalytics = async (req, res, next) => {
   try {
@@ -35,7 +36,7 @@ export const getDashboardAnalytics = async (req, res, next) => {
       });
     }
 
-    if (user.role !== "admin" && organization === "ALL") {
+    if (!seesAllDads(user) && organization === "ALL") {
       return res.status(403).json({
         success: false,
         message: "You are not allowed to access all organizations",

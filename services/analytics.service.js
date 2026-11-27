@@ -24,6 +24,7 @@ import {
   resolveIgfTargets,
   STATUS_RANK,
 } from "./analytics.metrics.js";
+import { seesAllDads } from "../utils/dataScope.js";
 
 export { parseDashboardPeriod };
 
@@ -329,8 +330,8 @@ export async function getDashboardAnalyticsData({
   const econ = isAll(economicClassification) ? "ALL" : economicClassification;
   const status = normaliseStatus(dataStatus);
 
-  // Non-admins are always pinned to their own DAD, whatever the controller passed.
-  const scopeOrg = user.role === "admin" ? organization : user.organization;
+  // Users without a ministry-wide scope are pinned to their own DAD, whatever the controller passed.
+  const scopeOrg = seesAllDads(user) ? organization : user.organization;
 
   const base = { organization: scopeOrg, fund, econ, revenueCategory, status };
   const { year, start, end } = parsed;

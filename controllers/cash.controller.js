@@ -1,8 +1,11 @@
 import Cash from "../models/cash.model.js";
 import User from "../models/users.js";
-import { notifyOrganization, notifyRecordOpened } from "../utils/notify.js";
+import { notifyOrganization, notifyPcmedStep, notifyRecordOpened } from "../utils/notify.js";
 import { editStepError, workflowStepError } from "../utils/workflowGuard.js";
 import { makeReturnHandler, notifyResubmitted } from "../utils/returnRecord.js";
+import { logWorkflowEvent } from "../utils/workflowLog.js";
+import { seesAllDads } from "../utils/dataScope.js";
+import { canViewUnapproved } from "../utils/permissions.js";
 
 export const addCashPosition = async (req, res, next) => {
   try {
@@ -60,6 +63,7 @@ export const addCashPosition = async (req, res, next) => {
       console.error("Failed to notify reviewers of new cash position:", notifyError);
     }
 
+    await logWorkflowEvent({ entityType: "cash", record: record, action: "submitted", from: null, to: "Pending", user: req.user });
     res.status(201).json({
       success: true,
       message: "Cash position added successfully",
@@ -81,9 +85,11 @@ export const getAllCashPositions = async (req, res, next) => {
     }
 
     // Everyone except admin is scoped to their own organization
-    if (user.role !== "admin") {
+    if (!seesAllDads(user)) {
       whereClause.organization = user.organization;
     }
+    // Roles that see only approved data (e.g. executives) never get unapproved records.
+    if (!(await canViewUnapproved(user))) whereClause.status = "Approved";
 
     const include = [
       {
@@ -129,7 +135,9 @@ export const updateCashPosition = async (req, res, next) => {
 
     const editError = editStepError(record, user, "edit");
     if (editError) return next(editError);
-    const resubmitted = record.status === "Returned";
+    const previousStatus = record.status;
+    // Corrected after a return by the DAD or by PCMED: back to DAD review.
+    const resubmitted = ["Returned", "ReturnedByPCMED"].includes(record.status);
 
     // Allowed updates
     if (updates.as_at_date !== undefined)
@@ -143,6 +151,12 @@ export const updateCashPosition = async (req, res, next) => {
     await record.save();
 
     if (resubmitted) await notifyResubmitted({ record, user: user, entityType: "cash", label: "Cash position" });
+
+    if (resubmitted) {
+
+      await logWorkflowEvent({ entityType: "cash", record, action: "resubmitted", from: previousStatus, to: "Pending", user: req.user });
+
+    }
 
     res.status(200).json({
       success: true,
@@ -221,6 +235,7 @@ export const reviewCashPosition = async (req, res, next) => {
     cash.reviewComment = reviewComment || null;
 
     await cash.save();
+    await logWorkflowEvent({ entityType: "cash", record: cash, action: "dad_reviewed", from: "Pending", to: "Reviewed", comment: cash.reviewComment, user: req.user });
 
     try {
       await notifyOrganization({
@@ -260,11 +275,25 @@ export const approveCashPosition = async (req, res, next) => {
     const stepError = workflowStepError(record, user, "approve");
     if (stepError) return next(stepError);
 
-    record.status = "Approved";
+    // DAD approval sends the record to PCMED; PCMED gives final approval.
+    record.status = "PendingPCMEDReview";
     record.approvedBy = user.name;
     record.approvedAt = new Date();
 
     await record.save();
+    await logWorkflowEvent({ entityType: "cash", record, action: "dad_approved", from: "Reviewed", to: "PendingPCMEDReview", user: req.user });
+    try {
+      await notifyPcmedStep({
+        record,
+        actorId: req.user.id,
+        entityType: "cash",
+        event: "sent_to_pcmed",
+        permission: "pcmed.review",
+        message: `${req.user.name} approved a cash position record from ${record.organization} for PCMED review`,
+      });
+    } catch (notifyError) {
+      console.error("Failed to notify PCMED reviewers:", notifyError);
+    }
 
     try {
       await notifyOrganization({
@@ -273,7 +302,7 @@ export const approveCashPosition = async (req, res, next) => {
         entityType: "cash",
         entityId: record.id,
         event: "approved",
-        message: `${user.name} approved a cash position`,
+        message: `${user.name} approved a cash position and sent it to PCMED`,
       });
     } catch (notifyError) {
       console.error("Failed to update cash approval notifications:", notifyError);
@@ -281,7 +310,7 @@ export const approveCashPosition = async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      message: "Cash position approved successfully",
+      message: "Cash position approved and sent to PCMED for review",
       data: record,
     });
   } catch (error) {

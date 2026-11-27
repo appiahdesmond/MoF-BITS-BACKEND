@@ -34,7 +34,7 @@ const Notification = sequelize.define(
     },
 
     entityType: {
-      type: DataTypes.ENUM("revenue", "cash", "expenditure", "reallocation"),
+      type: DataTypes.ENUM("revenue", "cash", "expenditure", "reallocation", "cashPlan", "workPlan"),
       allowNull: false,
     },
 
@@ -44,7 +44,18 @@ const Notification = sequelize.define(
     },
 
     event: {
-      type: DataTypes.ENUM("created", "reviewed", "approved", "viewed", "returned", "resubmitted"),
+      type: DataTypes.ENUM(
+        "created",
+        "reviewed",
+        "approved",
+        "viewed",
+        "returned",
+        "resubmitted",
+        "sent_to_pcmed",
+        "pcmed_reviewed",
+        "pcmed_approved",
+        "pcmed_returned",
+      ),
       allowNull: false,
     },
 

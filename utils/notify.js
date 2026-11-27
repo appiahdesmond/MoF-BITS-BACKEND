@@ -116,3 +116,28 @@ export async function notifyRecordOpened({ actor, record, entityType, label }) {
     },
   });
 }
+
+/**
+ * Notify users who can take the next PCMED step on a record: active users whose
+ * role has `permission` and whose data scope covers the record's DAD.
+ */
+export async function notifyPcmedStep({ record, actorId, entityType, event, message, permission }) {
+  const { permissionsForRole } = await import("./permissions.js");
+  const { dadScope, inScope } = await import("./dataScope.js");
+  const { ROLES } = await import("./pageAccess.js");
+  const roles = [];
+  for (const role of ROLES) {
+    if (role === "admin") continue; // administrators are told through notifyOrganization
+    if ((await permissionsForRole(role))[permission]) roles.push(role);
+  }
+  if (!roles.length) return;
+  const candidates = await User.findAll({
+    where: { role: { [Op.in]: roles }, status: "active", ...(actorId ? { id: { [Op.ne]: actorId } } : {}) },
+  });
+  const rows = [];
+  for (const user of candidates) {
+    if (!inScope(await dadScope(user), record.organization)) continue;
+    rows.push({ userId: user.id, organization: record.organization, actorId, entityType, entityId: record.id, event, message });
+  }
+  if (rows.length) await Notification.bulkCreate(rows);
+}

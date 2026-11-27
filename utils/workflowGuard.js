@@ -25,8 +25,11 @@ export function workflowStepError(record, user, step) {
   if (record.status === "Approved") {
     return fail(409, "This record has already been approved");
   }
-  if (record.status === "Returned") {
+  if (record.status === "Returned" || record.status === "ReturnedByPCMED") {
     return fail(409, "This record has been returned for correction and is waiting on the data entry officer");
+  }
+  if (record.status === "PendingPCMEDReview" || record.status === "PendingPCMEDApproval") {
+    return fail(409, "This record has been approved by the DAD and is now with PCMED");
   }
 
   if (step === "review" && record.status !== "Pending") {
@@ -36,19 +39,26 @@ export function workflowStepError(record, user, step) {
     return fail(409, "Only reviewed records can be approved. Send it for review first.");
   }
   if (step === "return") {
-    const allowed = isAdmin(user)
-      ? ["Pending", "Reviewed"]
-      : user.role === "reviewer"
-        ? ["Pending"]
-        : user.role === "approver"
-          ? ["Reviewed"]
-          : [];
+    // A role returns records at the steps it acts on: pending records if it may
+    // review, reviewed records if it may approve (Roles & Permissions).
+    const perms = user.permissions;
+    const allowed = perms
+      ? [...(perms["records.review"] ? ["Pending"] : []), ...(perms["records.approve"] ? ["Reviewed"] : [])]
+      : isAdmin(user)
+        ? ["Pending", "Reviewed"]
+        : user.role === "reviewer"
+          ? ["Pending"]
+          : user.role === "approver"
+            ? ["Reviewed"]
+            : [];
     if (!allowed.includes(record.status)) {
       return fail(
         409,
-        user.role === "approver"
-          ? "Approvers can only return records that have been reviewed"
-          : "Reviewers can only return records that are pending review",
+        allowed.length === 1 && allowed[0] === "Reviewed"
+          ? "You can only return records that have been reviewed"
+          : allowed.length === 1
+            ? "You can only return records that are pending review"
+            : "This record can't be returned at its current step",
       );
     }
   }
@@ -63,8 +73,8 @@ export function workflowStepError(record, user, step) {
  *  - Nobody changes Reviewed or Approved records.
  */
 export function editStepError(record, user, verb = "edit") {
-  if (record.status === "Reviewed" || record.status === "Approved") {
-    return fail(400, `You cannot ${verb} a reviewed or approved record`);
+  if (!["Pending", "Returned", "ReturnedByPCMED"].includes(record.status)) {
+    return fail(400, `You cannot ${verb} a record once it has been reviewed or approved`);
   }
   if (record.status === "Pending" && !isAdmin(user)) {
     return fail(

@@ -3,9 +3,12 @@ import User from "../models/users.js";
 import LoadedData from "../models/loadedData.js";
 import { Op } from "sequelize";
 import sequelize from "../config/database.js";
-import { notifyOrganization, notifyRecordOpened } from "../utils/notify.js";
+import { notifyOrganization, notifyPcmedStep, notifyRecordOpened } from "../utils/notify.js";
 import { editStepError, workflowStepError } from "../utils/workflowGuard.js";
 import { makeReturnHandler, notifyResubmitted } from "../utils/returnRecord.js";
+import { logWorkflowEvent } from "../utils/workflowLog.js";
+import { seesAllDads } from "../utils/dataScope.js";
+import { canViewUnapproved } from "../utils/permissions.js";
 
 export const addExpenditure = async (req, res, next) => {
   const t = await sequelize.transaction();
@@ -200,6 +203,7 @@ export const addExpenditure = async (req, res, next) => {
       console.error("Failed to notify reviewers of new expenditure record:", notifyError);
     }
 
+    await logWorkflowEvent({ entityType: "expenditure", record: expenditure, action: "submitted", from: null, to: "Pending", user: req.user });
     res.status(201).json({
       success: true,
       message: "Expenditure record added successfully",
@@ -225,9 +229,11 @@ export const getAllExpenditure = async (req, res, next) => {
     }
 
     // Everyone except admin is scoped to their own organization
-    if (user.role !== "admin") {
+    if (!seesAllDads(user)) {
       whereClause.organization = user.organization;
     }
+    // Roles that see only approved data (e.g. executives) never get unapproved records.
+    if (!(await canViewUnapproved(user))) whereClause.status = "Approved";
 
     const include = [
       {
@@ -286,7 +292,9 @@ export const updateExpenditure = async (req, res, next) => {
 
     const editError = editStepError(record, user, "edit");
     if (editError) throw editError;
-    const resubmitted = record.status === "Returned";
+    const previousStatus = record.status;
+    // Corrected after a return by the DAD or by PCMED: back to DAD review.
+    const resubmitted = ["Returned", "ReturnedByPCMED"].includes(record.status);
 
     /* =========================
        MERGE OLD + NEW VALUES
@@ -415,6 +423,12 @@ export const updateExpenditure = async (req, res, next) => {
 
     if (resubmitted) await notifyResubmitted({ record, user: user, entityType: "expenditure", label: "Expenditure" });
 
+    if (resubmitted) {
+
+      await logWorkflowEvent({ entityType: "expenditure", record, action: "resubmitted", from: previousStatus, to: "Pending", user: req.user });
+
+    }
+
     res.status(200).json({
       success: true,
       message: "Expenditure record updated successfully",
@@ -483,11 +497,25 @@ export const approveExpenditure = async (req, res, next) => {
     if (stepError) return next(stepError);
 
     // Approver marks record as approved
-    record.status = "Approved";
+    // DAD approval sends the record to PCMED; PCMED gives final approval.
+    record.status = "PendingPCMEDReview";
     record.approvedBy = user.name;
     record.approvedAt = new Date();
 
     await record.save();
+    await logWorkflowEvent({ entityType: "expenditure", record, action: "dad_approved", from: "Reviewed", to: "PendingPCMEDReview", user: req.user });
+    try {
+      await notifyPcmedStep({
+        record,
+        actorId: req.user.id,
+        entityType: "expenditure",
+        event: "sent_to_pcmed",
+        permission: "pcmed.review",
+        message: `${req.user.name} approved an expenditure record from ${record.organization} for PCMED review`,
+      });
+    } catch (notifyError) {
+      console.error("Failed to notify PCMED reviewers:", notifyError);
+    }
 
     try {
       await notifyOrganization({
@@ -496,7 +524,7 @@ export const approveExpenditure = async (req, res, next) => {
         entityType: "expenditure",
         entityId: record.id,
         event: "approved",
-        message: `${user.name} approved an expenditure record`,
+        message: `${user.name} approved an expenditure record and sent it to PCMED`,
       });
     } catch (notifyError) {
       console.error("Failed to update expenditure approval notifications:", notifyError);
@@ -504,7 +532,7 @@ export const approveExpenditure = async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      message: "Expenditure record approved successfully",
+      message: "Expenditure record approved and sent to PCMED for review",
       data: record,
     });
   } catch (error) {
@@ -552,6 +580,7 @@ export const reviewExpenditure = async (req, res, next) => {
     record.reviewComment = reviewComment || null;
 
     await record.save();
+    await logWorkflowEvent({ entityType: "expenditure", record: record, action: "dad_reviewed", from: "Pending", to: "Reviewed", comment: record.reviewComment, user: req.user });
 
     try {
       await notifyOrganization({

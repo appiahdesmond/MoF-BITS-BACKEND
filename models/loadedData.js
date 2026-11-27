@@ -44,6 +44,11 @@ const LoadedData = sequelize.define(
       type: DataTypes.INTEGER,
       allowNull: false,
     },
+    // Activity/Operation the budget line funds (cash plans are prepared per activity).
+    activityCode: { type: DataTypes.STRING(50), allowNull: true },
+    activity: { type: DataTypes.STRING(255), allowNull: true },
+    // Normal activity or Key Policy Initiative (KPI).
+    policyClassification: { type: DataTypes.ENUM("Normal", "KPI"), allowNull: false, defaultValue: "Normal" },
   },
   { tableName: 'loadeddata',
     timestamps: true 

@@ -2,7 +2,7 @@ import { requirePage } from "../utils/pageAccess.js";
 import { Router } from "express";
 import { addExpenditure, approveExpenditure, deleteExpenditure, getAllExpenditure, markExpenditureViewed, reviewExpenditure, updateExpenditure, returnExpenditure } from "../controllers/expenditure.controller.js";
 import { protectRoutes } from "../middleware/routesProtect.js";
-import { restrict } from "../middleware/restrict.js";
+import { requirePermission } from "../utils/permissions.js";
 
 
 const router = Router();
@@ -11,20 +11,20 @@ router.use(protectRoutes);
 // Only roles allowed to open this page (Console › Roles & Permissions).
 router.use(requirePage("expenditure"));
 
-router.post("/", restrict("data_entry", "admin"), addExpenditure);
+router.post("/", requirePermission("records.create"), addExpenditure);
 
-router.put("/:id", restrict("data_entry", "admin"), updateExpenditure);
+router.put("/:id", requirePermission("records.edit"), updateExpenditure);
 
-router.delete("/:id", restrict("data_entry", "admin"), deleteExpenditure);
+router.delete("/:id", requirePermission("records.edit"), deleteExpenditure);
 
 //reviewer
-router.patch("/:id/review", restrict("reviewer", "admin"), reviewExpenditure);
-router.patch("/:id/return", restrict("reviewer", "approver", "admin"), returnExpenditure);
+router.patch("/:id/review", requirePermission("records.review"), reviewExpenditure);
+router.patch("/:id/return", requirePermission("records.return"), returnExpenditure);
 
 //approver
-router.patch("/:id/approve", restrict("approver", "admin"), approveExpenditure);
+router.patch("/:id/approve", requirePermission("records.approve"), approveExpenditure);
 
-router.post("/:id/view", restrict("reviewer", "approver", "admin"), markExpenditureViewed);
+router.post("/:id/view", requirePermission("records.review", "records.approve"), markExpenditureViewed);
 
 router.get("/", getAllExpenditure);
 

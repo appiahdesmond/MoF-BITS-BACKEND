@@ -12,6 +12,20 @@ const normalize = (value) => {
 
 
 
+// Optional activity fields on a budget line (cash plans are prepared per activity).
+const POLICY = { normal: "Normal", kpi: "KPI", "key policy initiative": "KPI" };
+function activityFields(body) {
+  const out = {};
+  if (body.activityCode !== undefined) out.activityCode = normalize(body.activityCode) || null;
+  if (body.activity !== undefined) out.activity = normalize(body.activity) || null;
+  if (body.policyClassification !== undefined) {
+    const policy = POLICY[normalize(body.policyClassification).toLowerCase()];
+    if (!policy) throw Object.assign(new Error("Policy classification must be Normal or KPI"), { statusCode: 400 });
+    out.policyClassification = policy;
+  }
+  return out;
+}
+
 export const createLoadedData = async (req, res, next) => {
   try {
     const {
@@ -80,6 +94,7 @@ export const createLoadedData = async (req, res, next) => {
       allotment: allotmentValue, // DEFAULTS TO 0
       year,
       userId,
+      ...activityFields(req.body),
     });
 
     return res.status(201).json({
@@ -159,6 +174,15 @@ export const uploadExcelLoadedData = async (req, res, next) => {
       const rawAppropriation = row.getCell(5).value;
       const rawAllotment = row.getCell(6).value;
       const rawYear = row.getCell(7).value;
+      // Optional: Activity/Operation code and description, policy classification.
+      const activityCode = normalize(row.getCell(8).value) || null;
+      const activity = normalize(row.getCell(9).value) || null;
+      const rawPolicy = normalize(row.getCell(10).value).toLowerCase();
+      const policyClassification = rawPolicy ? POLICY[rawPolicy] : "Normal";
+      if (!policyClassification) {
+        errors.push({ row: rowNumber, error: "Policy classification must be Normal or KPI" });
+        return;
+      }
 
       const organization = normalize(rawOrganization);
       const economicClassification = normalize(rawEconomicClassification);
@@ -223,7 +247,10 @@ export const uploadExcelLoadedData = async (req, res, next) => {
         naturalAccount,
         appropriation: appropriationNum,
         allotment: allotmentNum,
-        year: yearNum, 
+        year: yearNum,
+        activityCode,
+        activity,
+        policyClassification,
         userId: user.id,
       });
     });
@@ -270,6 +297,9 @@ export const downloadAppropriationTemplate = async (req, res, next) => {
       { header: "appropriation", key: "appropriation", width: 15 },
       { header: "allotment", key: "allotment", width: 15 },
       { header: "year", key: "year", width: 15 },
+      { header: "activityCode", key: "activityCode", width: 18 },
+      { header: "activity", key: "activity", width: 40 },
+      { header: "policyClassification", key: "policyClassification", width: 22 },
     ];
 
     // Add a sample row for guidance
@@ -280,7 +310,10 @@ export const downloadAppropriationTemplate = async (req, res, next) => {
       naturalAccount: "123456-Transportation",
       appropriation: 500000.0,
       allotment: 200000.0,
-      year: 2026
+      year: 2026,
+      activityCode: "ACT-0001",
+      activity: "Example activity description",
+      policyClassification: "Normal",
     });
 
     // Style header row
@@ -377,6 +410,7 @@ export const updateLoadedData = async (req, res, next) => {
       naturalAccount,
       appropriation,
       allotment,
+      ...activityFields(req.body),
     });
 
     res.status(200).json({

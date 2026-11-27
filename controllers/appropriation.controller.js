@@ -1,6 +1,7 @@
 import LoadedData from "../models/loadedData.js";
 import User from "../models/users.js";
 import { fn, col } from "sequelize";
+import { seesAllDads } from "../utils/dataScope.js";
 
 export const getAppropriationSummary = async (req, res, next) => {
   try {
@@ -8,7 +9,7 @@ export const getAppropriationSummary = async (req, res, next) => {
 
     const user = await User.findByPk(req.user.id);
 
-    if (user.role !== "admin" && organization === "ALL") {
+    if (!seesAllDads(user) && organization === "ALL") {
       return res.status(403).json({
         success: false,
         message: "You are not allowed to access all organizations",
@@ -16,7 +17,7 @@ export const getAppropriationSummary = async (req, res, next) => {
     }
 
     const where =
-      user.role === "admin"
+      seesAllDads(user)
         ? organization && organization !== "ALL"
           ? { organization }
           : {}
@@ -61,7 +62,7 @@ export const getAppropriationSummary = async (req, res, next) => {
       success: true,
       year,
       organization:
-        user.role === "admin" ? organization || "ALL" : user.organization,
+        seesAllDads(user) ? organization || "ALL" : user.organization,
       sourceOfFunding,
       data: Object.values(data),
     });

@@ -1,5 +1,6 @@
 import BudgetExpenditure from "../models/expenditure.model.js";
 import { Op, fn, col } from "sequelize";
+import { seesAllDads } from "../utils/dataScope.js";
 
 // =========================
 // FETCH DATA
@@ -35,7 +36,7 @@ export async function getQuarterlyNaturalAccountData({
     where.sourceOfFunding = sourceOfFunding;
   }
 
-  if (user.role !== "admin") {
+  if (!seesAllDads(user)) {
     where.organization = user.organization;
   } else if (organization && organization !== "ALL") {
     where.organization = organization;
